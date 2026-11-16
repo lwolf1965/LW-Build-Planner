@@ -1,0 +1,25 @@
+name: Suggestion
+description: An idea for LW Build Planner
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This plugin has one job: build planning (pick blocks, check parts, order them from crafters).
+        Ideas outside that are better as a separate plugin.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What do you want to achieve in the game?
+      description: The situation, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work?
+      description: A key, a window element, a setting. A sketch is fine.
+  - type: textarea
+    id: now
+    attributes:
+      label: What do you do today instead?
