@@ -9,7 +9,6 @@
     <SourceDirectories>
         <Directory>ClientPlugin</Directory>
     </SourceDirectories>
-    <!-- Shown in the Pulsar plugin list -->
     <Hidden>false</Hidden>
-    <Commit>9e265ae5ed202aba6473002635ebcc8a31a825b2</Commit>
+    <Commit>5b8129e28951bc30012305af4fbb052b59109470</Commit>
 </PluginData>

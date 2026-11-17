@@ -123,6 +123,3 @@ The window, the notifications and the problem texts follow the game's language: 
 - Orders go to the crafters of one grid: the one with the most crafters.
 - When all orders are done the ordered blocks always leave the list. To build the same again, pick the blocks again (a "repeat" option may come later).
 - `+` and Ctrl+N cannot be changed yet. `+` in the G menu needs Windows; Ctrl+N works everywhere (it uses the game's own input).
-
-## 6. With LW Cargo Manager
-The two plugins do not get in each other's way. Cargo Manager moves finished parts from the crafters into your `[Parts]` containers; the planner counts parts in crafters and containers alike.
