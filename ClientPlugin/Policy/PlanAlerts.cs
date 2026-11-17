@@ -44,7 +44,7 @@ public static class PlanAlerts
         if (tree.Orders.Count == 0 && tree.RawShortage.Count == 0) return alerts; // nothing to build
 
         if (facts.StorageCount == 0)
-            Add(AlertLevel.Error, "No storage on the conveyor network: nothing to take materials from or put parts into.");
+            Add(AlertLevel.Error, Tr.T("alert.noStorage"));
 
         foreach (var machine in tree.Orders.Select(o => o.Machine).Distinct().OrderBy(m => m, StringComparer.Ordinal))
         {
@@ -53,23 +53,23 @@ public static class PlanAlerts
             var list = string.Join(", ", items.Take(4)) + (items.Count > 4 ? ", ..." : "");
             var unlinked = facts.UnlinkedCrafters.Where(c => c.Machine == machine).Select(c => c.Name).ToList();
             Add(AlertLevel.Error, unlinked.Count > 0
-                ? $"No {machine} can reach storage ({string.Join(", ", unlinked)}): cannot make {list}."
-                : $"No {machine} to use on this grid (missing, not working, or named [NoMake]): cannot make {list}.");
+                ? Tr.T("alert.noReach", machine, string.Join(", ", unlinked), list)
+                : Tr.T("alert.noMachine", machine, list));
         }
 
         foreach (var kv in tree.RawShortage.OrderBy(k => nameOf(k.Key), StringComparer.OrdinalIgnoreCase))
             Add(AlertLevel.Error, isOre(kv.Key)
-                ? $"Ore deficit: {nameOf(kv.Key)}, {N(kv.Value)} more needed (mine or buy)."
-                : $"{nameOf(kv.Key)}: {N(kv.Value)} short and no crafter on this grid can make it (a crafter is missing, or it is a raw item).");
+                ? Tr.T("alert.ore", nameOf(kv.Key), N(kv.Value))
+                : Tr.T("alert.short", nameOf(kv.Key), N(kv.Value)));
 
         foreach (var crafter in facts.UnlinkedCrafters)
-            Add(AlertLevel.Warning, $"{crafter.Name}: no conveyor link to the main network, not used.");
+            Add(AlertLevel.Warning, Tr.T("alert.crafterUnlinked", crafter.Name));
         foreach (var storage in facts.UnlinkedStorages)
-            Add(AlertLevel.Warning, $"{storage}: no conveyor link, its items are not counted.");
+            Add(AlertLevel.Warning, Tr.T("alert.storageUnlinked", storage));
         foreach (var kv in facts.StockInUnlinked.OrderBy(k => nameOf(k.Key), StringComparer.OrdinalIgnoreCase))
-            Add(AlertLevel.Warning, $"{nameOf(kv.Key)}: {N(kv.Value)} lying in storage with no conveyor link, not counted.");
+            Add(AlertLevel.Warning, Tr.T("alert.stranded", nameOf(kv.Key), N(kv.Value)));
         if (facts.NonFunctionalCrafters > 0)
-            Add(AlertLevel.Warning, $"{facts.NonFunctionalCrafters} crafter(s) not working (unfinished, damaged or unpowered?), not used.");
+            Add(AlertLevel.Warning, Tr.T("alert.broken", facts.NonFunctionalCrafters));
 
         return alerts.OrderByDescending(a => a.Level).ToList();
     }
@@ -95,11 +95,11 @@ public static class PlanAlerts
         if (need <= 0) return null;
         var take = Math.Ceiling(need).ToString("N0", CultureInfo.InvariantCulture);
         var room = Math.Floor(free).ToString("N0", CultureInfo.InvariantCulture);
-        var most = biggest == null ? "" : $" Heaviest: {nameOf(biggest)}.";
+        var most = biggest == null ? "" : Tr.T("space.heaviest", nameOf(biggest));
         if (need > free)
-            return new PlanAlert { Level = AlertLevel.Error, Text = $"Not enough cargo space: the new parts weigh {take}, only {room} is free in storage.{most} Add storage or empty some." };
+            return new PlanAlert { Level = AlertLevel.Error, Text = Tr.T("space.full", take, room, most) };
         if (need > TightShare * free)
-            return new PlanAlert { Level = AlertLevel.Warning, Text = $"Cargo space gets tight: the new parts weigh {take} of {room} free.{most}" };
+            return new PlanAlert { Level = AlertLevel.Warning, Text = Tr.T("space.tight", take, room, most) };
         return null;
     }
 

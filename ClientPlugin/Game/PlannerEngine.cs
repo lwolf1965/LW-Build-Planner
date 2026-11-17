@@ -34,13 +34,16 @@ internal static class PlannerEngine
     public static void Enqueue(Action<PlannerContext> action) => Pending.Enqueue(action);
 
     /// <summary>Build list, check result and orders belong to one world: a new session starts them empty.</summary>
-    private static void ForgetWorld()
+    private static void ForgetWorld(WorldSessionComponent world)
     {
+        PlanSave.Detach(); // nothing of the old world is written into the new world's file
         OrderBook.ForgetWorld();
+        GameLanguage.Refresh(); // messages of this world in the game's language
         PlanStore.Clear();
         PlanStore.Offered = null;
         PlanService.LastView = null;
         PluginLog.Info("New world session: build list, check and orders reset.");
+        PlanSave.Attach(world); // this world's saved build list
     }
 
     public static void OnUpdate(Session session, bool updateLifetime)
@@ -69,7 +72,7 @@ internal static class PlannerEngine
             if (!probed)
             {
                 Probed.Add(session, new object()); // from now on idle frames stop early (see above)
-                ForgetWorld(); // a world was loaded: nothing of the previous one may stay
+                ForgetWorld(world); // a world was loaded: nothing of the previous one may stay
             }
 
             if (OrderBook.TickDue)

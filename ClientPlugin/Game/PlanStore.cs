@@ -27,7 +27,7 @@ internal sealed class PlannedEntry
 /// Lines are kept per picked variant (the G menu tile's definition), because several variants can share one cost.
 /// A line that reaches 0 leaves the list. Entries are never changed in place: every change stores a new entry, so a
 /// snapshot taken for the screen stays consistent.
-/// Not saved yet: the list is empty after a game restart.
+/// Saved per world by PlanSave after every change (see there).
 /// </summary>
 internal static class PlanStore
 {
@@ -40,14 +40,23 @@ internal static class PlanStore
     /// <summary>Adds blocks of the offered block, kept within the line's limit. Returns how many were really added.</summary>
     public static int AddOffered(PlannedEntry offered, int count)
     {
+        int added;
         lock (Gate)
         {
             var before = Entries.TryGetValue(offered.Key, out var entry) ? entry.Count : 0;
             var after = PlanLimits.Apply(before, count, offered.Armor);
             if (after != before)
                 Entries[offered.Key] = new PlannedEntry { Key = offered.Key, Name = offered.Name, Block = offered.Block, Count = after, Armor = offered.Armor };
-            return after - before;
+            added = after - before;
         }
+        if (added != 0) PlanSave.Save();
+        return added;
+    }
+
+    /// <summary>A line read back from the world's file (PlanSave); not written again.</summary>
+    public static void Restore(PlannedEntry entry)
+    {
+        lock (Gate) Entries[entry.Key] = entry;
     }
 
     /// <summary>Messages for the player; shown by the UI thread as HUD notifications and always logged.</summary>
@@ -58,14 +67,16 @@ internal static class PlanStore
     /// <summary>Adds (or with a negative count removes) blocks; returns the new count of that line.</summary>
     public static int Add(object variantKey, string name, CubeBlockDefinition block, int count)
     {
+        int now;
         lock (Gate)
         {
             Entries.TryGetValue(variantKey, out var entry);
-            var now = Math.Max(0, (entry?.Count ?? 0) + count);
+            now = Math.Max(0, (entry?.Count ?? 0) + count);
             if (now == 0) Entries.Remove(variantKey);
             else Entries[variantKey] = new PlannedEntry { Key = variantKey, Name = name, Block = block, Count = now, Armor = IsArmor(block) };
-            return now;
         }
+        PlanSave.Save();
+        return now;
     }
 
     /// <summary>
@@ -74,20 +85,23 @@ internal static class PlanStore
     /// </summary>
     public static int Change(object variantKey, int delta)
     {
+        int now;
         lock (Gate)
         {
             if (!Entries.TryGetValue(variantKey, out var entry)) return 0;
-            var now = PlanLimits.Apply(entry.Count, delta, entry.Armor);
+            now = PlanLimits.Apply(entry.Count, delta, entry.Armor);
             if (now == 0) Entries.Remove(variantKey);
             else Entries[variantKey] = new PlannedEntry { Key = variantKey, Name = entry.Name, Block = entry.Block, Count = now, Armor = entry.Armor };
-            return now;
         }
+        PlanSave.Save();
+        return now;
     }
 
     /// <summary>Takes a whole line out of the list.</summary>
     public static void Remove(object variantKey)
     {
         lock (Gate) Entries.Remove(variantKey);
+        PlanSave.Save();
     }
 
     public static int CountOf(object variantKey)
@@ -95,9 +109,56 @@ internal static class PlanStore
         lock (Gate) return Entries.TryGetValue(variantKey, out var entry) ? entry.Count : 0;
     }
 
+    /// <summary>Empties the list (Clear list button: saved; a world change: PlanSave is detached first, nothing written).</summary>
     public static void Clear()
     {
-        lock (Gate) Entries.Clear();
+        lock (Gate)
+        {
+            Entries.Clear();
+            Ordered.Clear();
+        }
+        PlanSave.Save();
+    }
+
+    /// <summary>Blocks per line that the running orders cover (see OrderedBlocks). Not saved: orders are not saved either.</summary>
+    private static readonly Dictionary<object, int> Ordered = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>An order was placed for these lines (the list as it was checked for the order).</summary>
+    public static void MarkOrdered(IEnumerable<PlannedEntry> lines)
+    {
+        lock (Gate) OrderedBlocks.Mark(Ordered, lines.Select(e => new KeyValuePair<object, int>(e.Key, e.Count)));
+    }
+
+    /// <summary>The orders were stopped or removed before they were done: the list stays as it is.</summary>
+    public static void ForgetOrdered()
+    {
+        lock (Gate) Ordered.Clear();
+    }
+
+    /// <summary>
+    /// All orders are done: the ordered blocks leave the build list (lines added or raised since the last order keep the
+    /// rest). Returns how many blocks were taken off.
+    /// </summary>
+    public static int TakeOrdered()
+    {
+        var taken = 0;
+        lock (Gate)
+        {
+            if (Ordered.Count == 0) return 0;
+            var counts = Entries.ToDictionary(p => p.Key, p => p.Value.Count, ReferenceEqualityComparer.Instance);
+            var left = OrderedBlocks.Left(counts, Ordered, ReferenceEqualityComparer.Instance);
+            foreach (var (key, entry) in Entries.ToList())
+            {
+                var now = left.TryGetValue(key, out var n) ? n : 0;
+                if (now == entry.Count) continue;
+                taken += entry.Count - now;
+                if (now == 0) Entries.Remove(key);
+                else Entries[key] = new PlannedEntry { Key = key, Name = entry.Name, Block = entry.Block, Count = now, Armor = entry.Armor };
+            }
+            Ordered.Clear();
+        }
+        if (taken > 0) PlanSave.Save();
+        return taken;
     }
 
     public static List<PlannedEntry> Snapshot()

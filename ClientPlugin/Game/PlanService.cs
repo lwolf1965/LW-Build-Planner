@@ -67,7 +67,7 @@ internal static class PlanService
         if (grid == null)
         {
             LastView = new PlanView { Alerts = { new PlanAlert { Level = AlertLevel.Error, Text = "No crafter found on any grid you own." } } };
-            if (mode != OrderMode.None) PlanStore.Say("Build Planner: no crafter found on any grid you own");
+            if (mode != OrderMode.None) PlanStore.Say(Tr.T("hud.noCrafterAny"));
             return;
         }
 
@@ -96,27 +96,30 @@ internal static class PlanService
 
         if (plan.Count == 0)
         {
-            PlanStore.Say("Build Planner: the build list is empty");
+            PlanStore.Say(Tr.T("hud.emptyList"));
             return;
         }
         if (report.Need.Count == 0)
         {
             // Only possible with "order missing": tell the player instead of silently doing nothing.
-            PlanStore.Say("Build Planner: you already have every part for this list, nothing ordered. 'Order all' makes them anyway.");
+            PlanStore.Say(Tr.T("hud.haveAll"));
             return;
         }
         if (!report.CanBuild)
         {
             var errors = report.Alerts.Where(a => a.Level == AlertLevel.Error).ToList();
-            PlanStore.Say($"Build Planner: cannot order, {errors.Count} problem(s)");
+            PlanStore.Say(Tr.T("hud.cannotOrder", errors.Count));
             foreach (var error in errors.Take(2)) PlanStore.Say(error.Text);
             return;
         }
 
         var made = string.Join(", ", report.Need.OrderBy(n => report.NameOf(n.Key)).Take(4).Select(n => $"{n.Value:N0} {report.NameOf(n.Key)}"));
         OrderBook.Commit(context, report);
-        PlanStore.Clear(); // the list is now an order; the screen shows it under Orders
-        PlanStore.Say($"Build Planner: ordered {made}{(report.Need.Count > 4 ? ", ..." : "")}");
+        // The list stays while the orders run (and is saved with the world): their parts count as "on order", after a
+        // restart "Order missing" compares the list with storage again. When all orders are done the ordered blocks
+        // leave the list (OrderBook.Process).
+        PlanStore.MarkOrdered(plan);
+        PlanStore.Say(Tr.T("hud.ordered", made + (report.Need.Count > 4 ? ", ..." : "")));
         Check(context, OrderMode.None); // refresh the view
     }
 }

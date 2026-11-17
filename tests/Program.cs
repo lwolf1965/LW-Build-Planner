@@ -291,5 +291,58 @@ Check(credit.QueuedOfCrafter(2) == 0 && credit.QueuedOfCrafter(1) == 10, "ledger
 credit.Arrived("A", 10);
 Check(credit.QueuedOfCrafter(1) == 0 && !credit.Active, "ledger: without a hint the lowest id is credited as before");
 
+
+// ---- texts in the game's 13 languages (Policy/Tr)
+var placeholder = new System.Text.RegularExpressions.Regex(@"\{(\d+)\}");
+Check(Tr.Languages.Length == 13 && Tr.Languages[0] == "en", "texts: 13 languages, English first (the fallback)");
+var badRows = Tr.Keys.Where(k => Tr.Row(k) == null || Tr.Row(k).Length != Tr.Languages.Length || Tr.Row(k).Any(string.IsNullOrWhiteSpace)).ToList();
+Check(badRows.Count == 0, "texts: every text exists in every language" + (badRows.Count > 0 ? " (missing: " + string.Join(", ", badRows.Take(5)) + ")" : ""));
+string Slots(string text) => string.Join(",", placeholder.Matches(text).Select(m => m.Groups[1].Value).Distinct().OrderBy(v => v));
+var badSlots = Tr.Keys.SelectMany(k => Tr.Languages.Select((code, i) => (k, code, i))).Where(x => Slots(Tr.Row(x.k)[x.i]) != Slots(Tr.Row(x.k)[0])).Select(x => x.k + "/" + x.code).ToList();
+Check(badSlots.Count == 0, "texts: every translation keeps the placeholders of the English text" + (badSlots.Count > 0 ? " (" + string.Join(", ", badSlots.Take(5)) + ")" : ""));
+var strayBraces = Tr.Keys.SelectMany(k => Tr.Row(k)).Where(t => placeholder.Replace(t, "").IndexOfAny(new[] { '{', '}' }) >= 0).ToList();
+Check(strayBraces.Count == 0, "texts: no braces besides the placeholders (the game would read them as filters)");
+Check(Tr.Normalize("ru-RU") == "ru" && Tr.Normalize("cz-CZ") == "cs" && Tr.Normalize("pt-BR") == "pt" && Tr.Normalize("zh-CN") == "zh" && Tr.Normalize("uk-UA") == "uk", "texts: the game's culture names map to the languages (cz-CZ is Czech)");
+Check(Tr.Normalize("ja-JP") == "en" && Tr.Normalize(null) == "en" && Tr.Normalize("") == "en", "texts: an unknown language falls back to English");
+Check(Tr.In("en", "hud.added", "Mk1", 5, 16) == "Build: Mk1 +5 (now 16)", "texts: placeholders are filled in");
+Check(Tr.In("de", "btn.check") == "Prüfen" && Tr.In("xx", "btn.check") == "Check", "texts: a language code gives its text, an unknown code English");
+Check(Tr.In("en", "no.such.key") == "no.such.key", "texts: an unknown key shows as itself");
+Tr.Use("ru-RU");
+var ruAlerts = PlanAlerts.Build(tree, Good(), Nm, Ore);
+Check(Tr.Language == "ru" && ruAlerts.Any(a => a.Text.Contains("Не хватает руды: OreTitanium, нужно ещё 240")), "texts: alerts follow the game's language (Russian)");
+Tr.Use("en-US");
+Check(Tr.Language == "en" && PlanAlerts.Build(tree, Good(), Nm, Ore).Any(a => a.Text.Contains("Ore deficit: OreTitanium, 240")), "texts: back to English");
+
+
+// ---- finished orders take their blocks off the build list (OrderedBlocks)
+var ordered = new Dictionary<string, int>();
+OrderedBlocks.Mark(ordered, new Dictionary<string, int> { ["tank"] = 2, ["door"] = 2 });
+Check(OrderedBlocks.Left(new Dictionary<string, int> { ["tank"] = 2, ["door"] = 2 }, ordered).Count == 0, "done: ordered lines leave the list");
+OrderedBlocks.Mark(ordered, new Dictionary<string, int> { ["tank"] = 2, ["door"] = 3 });
+Check(ordered["tank"] == 2 && ordered["door"] == 3, "done: a second order on the same list does not count a line twice");
+var afterDone = OrderedBlocks.Left(new Dictionary<string, int> { ["tank"] = 5, ["door"] = 3, ["light"] = 4 }, ordered);
+Check(afterDone.Count == 2 && afterDone["tank"] == 3 && afterDone["light"] == 4, "done: blocks added after the order stay");
+Check(OrderedBlocks.Left(new Dictionary<string, int> { ["tank"] = 1 }, ordered).Count == 0, "done: a line lowered after the order goes, never below 0");
+
+// ---- build list file (PlanFile): kept per world across save and restart
+var savedLines = new[]
+{
+    new PlanLine { Key = "k-1", Block = "b-1", Count = 35, Name = "Heavy Armor Block" },
+    new PlanLine { Key = "k-2", Block = "b-2", Count = 2, Name = "Name\twith\ttabs\nand a newline" },
+    new PlanLine { Key = null, Block = "b-3", Count = 1, Name = "No key" },
+    new PlanLine { Key = "k-4", Block = "b-4", Count = 0, Name = "zero is not written" },
+};
+var fileText = PlanFile.Write(savedLines);
+var readBack = PlanFile.Read(fileText);
+Check(readBack.Count == 3 && readBack[0].Key == "k-1" && readBack[0].Block == "b-1" && readBack[0].Count == 35 && readBack[0].Name == "Heavy Armor Block", "list file: a line is read back as written");
+Check(readBack[1].Name == "Name with tabs and a newline" && readBack[1].Count == 2, "list file: tabs and line breaks in a name cannot break the file");
+Check(readBack[2].Key == "b-3", "list file: a line without its own key uses the block as key");
+Check(PlanFile.Read("something else\nk\tb\t5\tx").Count == 0, "list file: a file with an unknown header is ignored");
+Check(PlanFile.Read(PlanFile.Header + "\r\nk\tb\t7\tx\r\nbroken line\nk\tb\tnot-a-number\tx\nk\t\t3\tx\n").Count == 1, "list file: Windows line ends work, broken lines are skipped");
+Check(PlanFile.Read("").Count == 0 && PlanFile.Read(null).Count == 0, "list file: an empty file is an empty list");
+Check(PlanFile.FileName("3f2504e0-4f89-11d3-9a0c-0305e82c3301") == "3f2504e0-4f89-11d3-9a0c-0305e82c3301.txt", "list file: the world's save id is the file name");
+Check(PlanFile.FileName("../../evil\\path:name") is string safeName && safeName.EndsWith(".txt") && safeName.Substring(0, safeName.Length - 4).IndexOfAny(new[] { '/', '\\', ':', '.' }) < 0, "list file: a save id can never leave the plugin's folder");
+Check(PlanFile.FileName(null) == null && PlanFile.FileName("") == null && PlanFile.FileName("00000000-0000-0000-0000-000000000000") == null, "list file: a world without a save id gets no file");
+
 Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
 return fails == 0 ? 0 : 1;

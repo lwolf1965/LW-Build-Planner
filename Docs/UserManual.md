@@ -15,16 +15,16 @@ You want to build something, for example ten hydrogen thrusters. The planner tel
 | Armor | 1 | 10 | 100 | 1000 |
 | Everything else | 1 | 5 | 10 | 50 |
 
-A notification confirms each press, for example "Build Planner: Mk3 200 (Block size 1) +1 (now 3)".
+A notification confirms each press, for example "Build: Mk3 200 +1 (now 3)".
 
-4. **Ctrl+N** opens the planner window. The block you selected last is shown under **Selected block**, with **Add** buttons for the same three steps.
+4. **Ctrl+N** opens the planner window, in the G menu and anywhere else in a world (flying, walking, in a cockpit).
 
 In the G menu only `+` and Ctrl+N are keys. Removing, clearing and ordering are buttons in the window, so a stray key press never takes anything off your list or starts crafters.
 
 Note: the "Components" list in the G menu itself shows the cost of the first variant of a group for every variant. The planner uses the real cost of the variant and size you selected.
 
 ## 2. The planner window
-Press Ctrl+N while the G menu is open (or use the plugin's config button in Pulsar).
+Press Ctrl+N anywhere in a world (or use the plugin's config button in Pulsar).
 
 The window scrolls (mouse wheel or scroll bar) and is made of boxes, each with a short explanation of what it shows.
 
@@ -51,9 +51,9 @@ What you carry yourself is not counted.
 | waiting for a free crafter | no crafter of the right kind is free yet; it goes in as soon as one is |
 | done | everything ordered of it has arrived |
 | no progress | nothing arrived for a minute and no crafter works on it: check ore and sub-parts |
-| stopped, rest not made | you pressed Stop waiting (or the crafter is gone) |
+| stopped, rest not made | the crafter is gone, or the part could not be sent to any crafter |
 
-Under a line you see what each crafter still has ("Assembler 2: 12 left, crafting") and how many pieces are not queued yet. The numbers count parts that arrive in storage, so a part can stay at 0 for a while when its sub-parts are made first. When everything is done the lines stay on screen (with the time it took) until you start the next order or press Clear orders.
+Under a line you see what each crafter still has ("Assembler 2: 12 left, crafting") and how many pieces are not queued yet. The numbers count parts that arrive in storage, so a part can stay at 0 for a while when its sub-parts are made first. When everything is done the orders are removed and the ordered blocks leave the build list (see below). **Stop orders** ends running orders early and keeps the list.
 
 **Cargo space**: before an order the planner also checks that the new parts fit into the free capacity of the storage the crafters reach (the game limits cargo by mass). If they do not, "Order all" is blocked with "Not enough cargo space"; above 80 % of the free capacity you get a warning.
 
@@ -70,11 +70,13 @@ How the storage limiter works:
 | Check | counts storage, ore and conveyor links again |
 | Order all | makes every part in "need", whatever you already have |
 | Order missing | makes only the "missing" column; tells you when nothing is missing |
-| Clear list | empties the build list (orders stay) |
-| Stop waiting | drops parts that are not queued yet; crafters finish what they have |
-| Clear orders | empties the order list; crafters keep their queues |
+| Empty list | takes every line out of the build list; running orders go on |
 
-After an order the build list is empty and its parts appear under Orders.
+The Orders box has its own button. While orders run it is **Stop orders**: parts not yet given to a crafter are dropped and the box is emptied; crafters finish what is already in their queues. Finished orders clear themselves (and take their blocks off the list); if lines are left that can no longer run, the button says **Remove orders** and clears the box.
+
+**Check** is off while the build list is empty.
+
+After an order its parts appear under Orders, and the build list stays as it is while they run, so you can add more blocks and press **Order missing** for the difference. When all orders are done, the blocks you ordered leave the build list and the orders are removed: the build is ready, and it cannot be ordered twice by mistake. Blocks you added after the last order stay in the list.
 
 How parts are queued:
 - Part by part, oldest order first, in batches. Every crafter that is free gets a batch of up to 10 crafts of the oldest part that still waits; if that part needs fewer crafts than there are free crafters, the other crafters go on to the next part.
@@ -84,7 +86,7 @@ How parts are queued:
 - Only the parts of the blocks are queued. Their sub-parts are requested by the game's crafters themselves.
 - All of your crafters are used. Put `[NoMake]` in a crafter's name to keep the planner away from it. A Gearforge named `[Make Ammo]` belongs to LW Cargo Manager and is not used.
 
-When everything has arrived you get "Build Planner: all ordered parts are done" as a green notification with the game's notification sound.
+When everything has arrived you get "Build: all ordered parts are done, the blocks left the build list" as a green notification with the game's notification sound.
 
 ## 4. Problems and notes
 | Message | Meaning | What to do |
@@ -94,15 +96,21 @@ When everything has arrived you get "Build Planner: all ordered parts are done" 
 | No Assembler can reach storage | the crafter has no conveyor link to the main network | connect it |
 | No storage on the conveyor network | nothing to take materials from | add a container |
 | X: no conveyor link, not used / not counted | warning: a crafter or container is cut off | connect it, or ignore |
-| X is not progressing | no parts arrived for a minute and no crafter is working on it | check ore and sub-parts; Clear orders if it stays |
+| X is not progressing | no parts arrived for a minute and no crafter is working on it | check ore and sub-parts; **Stop orders** (in the Orders box) if it stays |
 | Not enough cargo space | the new parts weigh more than the free capacity of the storage | add or empty containers, or order fewer blocks |
+
+## Languages
+The window, the notifications and the problem texts follow the game's language: English, Czech, German, Spanish, French, Italian, Polish, Portuguese (Brazil), Russian, Slovak, Turkish, Ukrainian and Simplified Chinese. Block, part and crafter names come from the game itself. Change the language in the game's settings; the planner follows at once (the window shows it the next time it opens). A language the game adds later shows the planner in English.
 
 ## 5. Limits of this version
 - Progress counts parts arriving in storage. A mod that makes crafters output more than the recipe (for example a "4x faster" crafter mod) makes lines finish too early.
 - You cannot cancel parts that are already inside a crafter from the planner; remove them in the crafter's own screen.
-- The list and the orders are forgotten when you leave the world.
+- The build list is saved for each world (in `AppData\LwBuildPlanner\Worlds` inside the game's data folder) and comes back when you load that world again. A new world keeps its list from its first save on.
+- **Order all** checks storage again on every click, so ore you have just mined counts at once. If a problem is left, or orders are still running (the list stays after ordering, so a second Order all would make everything again), a notification says so and nothing is ordered. Use **Order missing** to add to running orders; it counts what is already on order. After an order click both order buttons wait a moment for the answer, so a quick second click does nothing.
+- The list stays while orders run, so it is still there after a restart. When all orders are done the ordered blocks leave it by themselves; **Empty list** clears it at any time.
+- Orders are not saved. After loading, the crafters finish what is already in their queues. Wait until they are done before you press **Order missing**: the planner does not see those old queues, so it would order those parts again.
 - Orders go to the crafters of one grid: the one with the most crafters.
-- `+` and Ctrl+N cannot be changed yet, and they need Windows. On other systems open the window with the plugin's config button in Pulsar (the selected block is not brought along there).
+- `+` and Ctrl+N cannot be changed yet. `+` in the G menu needs Windows; Ctrl+N works everywhere (it uses the game's own input).
 
 ## 6. With LW Cargo Manager
 The two plugins do not get in each other's way. Cargo Manager moves finished parts from the crafters into your `[Parts]` containers; the planner counts parts in crafters and containers alike.

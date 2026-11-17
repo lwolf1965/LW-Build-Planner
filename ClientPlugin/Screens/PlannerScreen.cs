@@ -3,6 +3,8 @@ using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -16,9 +18,9 @@ namespace ClientPlugin.Screens;
 /// <summary>
 /// The planner window: build list, parts check (need / stock / on order / missing), problems, and the progress of the
 /// running order (per part: done / ordered, status, and what each crafter still has).
-/// Opened with Ctrl+N from the G menu (bringing the selected block along) or from the plugin's config button in Pulsar.
+/// Opened with Ctrl+N anywhere in a world or from the plugin's config button in Pulsar.
 /// In the G menu + adds blocks directly; in the window every change is a button.
-/// Every change to the list is made here with buttons, never with stray keys.
+/// Every change to the list is made here with buttons, never with stray keys. Texts come from Policy/Tr (13 languages).
 /// The window only shows snapshots (PlanStore, PlanService.LastView, OrderBook.Lines) and queues actions for the game
 /// thread; it never touches the world. Redrawn once a second while open.
 /// Layout: Grid with the cards in a ScrollViewer in the * row, so the buttons always stay on screen. The window is
@@ -41,7 +43,11 @@ internal class PlannerScreen : ScreenView
     private ScrollViewer scroll;
     private TextBlock elapsedText;
     private DispatcherTimer timer;
-    private Button orderAll;
+    private Button check, orderAll, orderMissing, clearList;
+    /// <summary>Set when an order button is clicked: the order buttons stay off until the game thread has answered
+    /// (a newer check result) or 3 s have passed, so a second click cannot order everything twice.</summary>
+    private DateTime waitingSince = DateTime.MinValue;
+    private DateTime viewBeforeClick;
     private string lastDrawn;
 
     /// <summary>Opens the window (UI thread). Does nothing when it is already open.</summary>
@@ -50,6 +56,7 @@ internal class PlannerScreen : ScreenView
         if (open) return;
         try
         {
+            GameLanguage.Refresh(); // the window is built in the game's language
             var sharedUi = GameAccess.GetSharedUI();
             if (sharedUi == null)
             {
@@ -69,12 +76,13 @@ internal class PlannerScreen : ScreenView
     {
         var title = new TextBlock
         {
-            Text = "LW Build Planner", FontSize = 25, Foreground = Brushes.White,
+            Text = "LW Build Planner", FontSize = 21, Foreground = Brushes.White,
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         };
         var close = new Button
         {
-            Content = "X", Width = 40, Height = 40, HorizontalAlignment = HorizontalAlignment.Right,
+            Content = "X", Width = 30, Height = 30, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0), FontSize = 14,
+            HorizontalAlignment = HorizontalAlignment.Right,
             HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
         };
         close.Click += (_, _) => Dispose();
@@ -90,20 +98,39 @@ internal class PlannerScreen : ScreenView
             Background = new SolidColorBrush(Color.FromArgb(96, 41, 54, 62)),
         };
 
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center };
-        buttons.Children.Add(MakeButton("Check", "Count storage, ore and conveyor links again.", () => PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None))));
-        orderAll = MakeButton("Order all", "Make every part of the build list, whatever you already have. The list becomes an order. Blocked while the check below finds a problem.", () => PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.All)));
+        // WrapPanel: longer button texts (other languages) go on to a second row instead of leaving the window.
+        var buttons = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+        check = MakeButton(Tr.T("btn.check"), Tr.T("tip.check"), () => PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None)));
+        buttons.Children.Add(check);
+        orderAll = MakeButton(Tr.T("btn.orderAll"), Tr.T("tip.orderAll"), () => Order(OrderMode.All));
         buttons.Children.Add(orderAll);
-        buttons.Children.Add(MakeButton("Order missing", "Make only the 'missing' column: what storage and running orders do not cover.", () => PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.Missing))));
-        buttons.Children.Add(MakeButton("Clear list", "Empty the build list (orders are kept).", () =>
+        orderMissing = MakeButton(Tr.T("btn.orderMissing"), Tr.T("tip.orderMissing"), () => Order(OrderMode.Missing));
+        buttons.Children.Add(orderMissing);
+        clearList = MakeButton(Tr.T("btn.clearList"), Tr.T("tip.clearList"), () =>
         {
             PlanStore.Clear();
-            PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None));
-        }));
-        buttons.Children.Add(MakeButton("Stop waiting", "Drop parts that are not queued yet. Crafters finish what they have.", () => PlannerEngine.Enqueue(_ => OrderBook.StopWaiting())));
-        buttons.Children.Add(MakeButton("Clear orders", "Empty the order list (for lines that make no progress). Crafters keep their queues.", () => PlannerEngine.Enqueue(_ => OrderBook.Reset())));
+            PlannerEngine.Enqueue(c =>
+            {
+                // A new list starts clean: finished orders of the old list go too. Running orders stay (stop them in their box).
+                if (!OrderBook.LedgerForCheck.Active) OrderBook.Reset();
+                PlanService.Check(c, OrderMode.None);
+            });
+        });
+        buttons.Children.Add(clearList);
+        // Log every press that reaches a button of the bar (also grey ones, which raise no Click): a press that is not
+        // in the log never reached the button (something lay over it).
+        buttons.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
+        {
+            foreach (var child in buttons.Children)
+            {
+                if (child is not Button button) continue;
+                var at = e.GetPosition(button);
+                if (at.X >= 0 && at.Y >= 0 && at.X <= button.Bounds.Width && at.Y <= button.Bounds.Height)
+                    PluginLog.Info($"Window: '{button.Content}' pressed{(button.IsEnabled ? "" : " while off")}");
+            }
+        }, RoutingStrategies.Tunnel, handledEventsToo: true);
 
-        var layout = new Grid { Margin = new Thickness(24), RowDefinitions = new RowDefinitions("Auto,*,Auto") };
+        var layout = new Grid { Margin = new Thickness(16), RowDefinitions = new RowDefinitions("Auto,*,Auto") };
         Grid.SetRow(titleBar, 0);
         Grid.SetRow(scroll, 1);
         Grid.SetRow(buttons, 2);
@@ -116,8 +143,10 @@ internal class PlannerScreen : ScreenView
             Background = new SolidColorBrush(Color.FromArgb(230, 37, 47, 53)),
             BorderBrush = new SolidColorBrush(Color.FromArgb(160, 66, 77, 99)),
             BorderThickness = new Thickness(1.5),
-            Width = 980, Height = 820,
-            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            // Up to 900 x 760 and never larger than the screen (40 px free on every side): the game scales its UI with
+            // the screen height, so this is the same share of the screen at 1080p and 1440p and still fits on smaller ones.
+            MaxWidth = 900, MaxHeight = 760, Margin = new Thickness(40),
+            HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch,
             Child = layout,
         };
         var root = new Grid { Background = new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0)) };
@@ -134,7 +163,7 @@ internal class PlannerScreen : ScreenView
         base.OnAttachedToVisualTree(e);
         open = true;
         Redraw();
-        timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) }; // answers within a quarter second
         timer.Tick += (_, _) => Redraw();
         timer.Start();
     }
@@ -147,13 +176,51 @@ internal class PlannerScreen : ScreenView
         base.OnDetachedFromVisualTree(e);
     }
 
-    private static Button MakeButton(string text, string tip, Action run)
+    /// <summary>Order all / Order missing: both order buttons go off at once until the game thread has answered.</summary>
+    private void Order(OrderMode mode)
     {
-        var button = new Button { Content = text, Height = 44, Padding = new Thickness(14, 4, 14, 4), FontSize = 18 };
-        ToolTip.SetTip(button, tip);
+        // Order all while orders run would make everything twice: say so instead of ordering (the button stays
+        // clickable, so a click always gets an answer). Problems are answered by the check itself.
+        if (mode == OrderMode.All && OrderBook.Lines.Any(o => o.State != OrderState.Done && o.State != OrderState.Stopped))
+        {
+            PlanStore.Say(Tr.T("hud.ordersRunning"));
+            return;
+        }
+        // A second order click before the answer came back (at most 3 s) is ignored, so a quick double click cannot
+        // order everything twice. The buttons are not greyed out for this: switching a button off inside its own
+        // click can leave it "pressed" in Avalonia, and then the next click is lost.
+        var view = PlanService.LastView;
+        var answered = view != null && view.Time > viewBeforeClick;
+        if (!answered && DateTime.Now - waitingSince < TimeSpan.FromSeconds(3))
+        {
+            PluginLog.Info($"Window: order {mode} ignored, the previous order is still being answered");
+            return;
+        }
+        PluginLog.Info($"Window: order {mode} sent to the game thread");
+        waitingSince = DateTime.Now;
+        viewBeforeClick = view?.Time ?? DateTime.MinValue;
+        PlannerEngine.Enqueue(c => PlanService.Check(c, mode));
+    }
+
+    private Button MakeButton(string text, string tip, Action run)
+    {
+        // MinHeight = 0: the game's button style has a minimum height of its own, so a smaller Height would be ignored.
+        var button = new Button { Content = text, Height = 34, MinHeight = 0, Padding = new Thickness(12, 2, 12, 2), FontSize = 15, Margin = new Thickness(3) };
+        ToolTip.SetTip(button, SmallTip(tip));
+        // The buttons sit at the bottom of the screen: a tooltip placed below has no room there and pops up over the
+        // mouse, so the first click lands on the tooltip instead of the button. Above the button it never covers it.
+        ToolTip.SetPlacement(button, PlacementMode.Top);
+        ToolTip.SetVerticalOffset(button, -6);
+        ToolTip.SetShowDelay(button, 700);
         button.Click += (_, _) =>
         {
-            try { run(); }
+            try
+            {
+                PluginLog.Info($"Window: '{text}' clicked");
+                run();
+                lastDrawn = null; // show the result as soon as it is there
+                Dispatcher.UIThread.Post(Redraw, DispatcherPriority.Background); // after the click, never inside it
+            }
             catch (Exception e) { PluginLog.Error("Planner button failed: " + e); }
         };
         return button;
@@ -166,14 +233,17 @@ internal class PlannerScreen : ScreenView
             if (elapsedText != null) elapsedText.Text = OrderBook.ElapsedLabel(); // the clock runs without a rebuild
 
             var plan = PlanStore.Snapshot().OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
-            var offered = PlanStore.Offered;
             var view = PlanService.LastView;
             var orders = OrderBook.Lines;
-            // Nothing goes to the crafters while the check finds a problem (ore deficit, no crafter, no room ...).
-            orderAll.IsEnabled = plan.Count > 0 && view != null && view.CanBuild;
+            // Order all / Order missing stay clickable (Order() ignores a click while the previous one is answered):
+            // every click checks storage again first, and a problem or running orders are answered with a notification.
+            orderAll.IsEnabled = plan.Count > 0;
+            orderMissing.IsEnabled = plan.Count > 0;
+            clearList.IsEnabled = plan.Count > 0;
+            check.IsEnabled = plan.Count > 0; // nothing to check in an empty list
 
             // Rebuild only when something changed, so hovering and scrolling are not disturbed every second.
-            var stamp = offered?.Name + "#" + string.Join("|", plan.Select(p => p.Name + p.Count)) + "#" + view?.Time.Ticks + "#"
+            var stamp = string.Join("|", plan.Select(p => p.Name + p.Count)) + "#" + view?.Time.Ticks + "#"
                         + string.Join("|", orders.Select(o => $"{o.Item}{o.Done}/{o.Ordered}/{o.Waiting}/{o.Queued}/{o.State}{o.Detail}{o.Note}"));
             if (stamp == lastDrawn) return;
             lastDrawn = stamp;
@@ -182,50 +252,48 @@ internal class PlannerScreen : ScreenView
             content.Children.Clear();
             elapsedText = null;
 
-            // 0. The block brought from the G menu with Ctrl+N
-            var pick = Card("Selected block", "The block last selected in the G menu (with + or Ctrl+N). Add more of it with the buttons.");
-            if (offered == null) Line(pick, "none yet", Dim);
-            else pick.Children.Add(OfferRow(offered, plan.FirstOrDefault(p => ReferenceEquals(p.Key, offered.Key))?.Count ?? 0));
-
             // 1. Build list
-            var list = Card("Build list", "- and + change the count (Shift and Ctrl for bigger steps); a line at 0 leaves the list, X removes it. Limits per line: armor 1000, other blocks 50.");
-            if (plan.Count == 0) Line(list, "empty", Dim);
+            var list = Card(Tr.T("card.list"), Tr.T("hint.list"));
+            if (plan.Count == 0) Line(list, Tr.T("empty"), Dim);
             foreach (var entry in plan) list.Children.Add(ListRow(entry));
 
             // 2. Parts
-            var parts = Card("Parts" + (view == null ? "" : $"   (checked {view.Time:HH:mm:ss}{(string.IsNullOrEmpty(view.Grid) ? "" : ", " + view.Grid)})"),
-                "need = what the list uses; in storage = what the crafters can reach now; on order = already being made; missing = need - storage - on order.");
-            if (view == null) Line(parts, "checking ...", Dim);
-            else if (view.Parts.Count == 0) Line(parts, "nothing to check", Dim);
+            var parts = Card(Tr.T("card.parts") + (view == null ? "" : $"   ({Tr.T("parts.checked", view.Time.ToString("HH:mm:ss"))}{(string.IsNullOrEmpty(view.Grid) ? "" : ", " + view.Grid)})"),
+                Tr.T("hint.parts"));
+            if (view == null) Line(parts, Tr.T("checking"), Dim);
+            else if (view.Parts.Count == 0) Line(parts, Tr.T("nothingToCheck"), Dim);
             else
             {
-                parts.Children.Add(Row(Dim, ("part", 300), ("need", 110), ("in storage", 110), ("on order", 110), ("missing", 110)));
+                parts.Children.Add(Row(Dim, (Tr.T("col.part"), 280), (Tr.T("col.need"), 100), (Tr.T("col.stock"), 110), (Tr.T("col.onOrder"), 100), (Tr.T("col.missing"), 100)));
                 foreach (var part in view.Parts)
-                    parts.Children.Add(Row(part.Missing > 0 ? Warn : Good, (part.Item, 300), (N(part.Need), 110), (N(part.Stock), 110),
-                        (N(part.Incoming), 110), (N(part.Missing), 110)));
-                Line(parts, view.Parts.All(p => p.Missing == 0)
-                    ? "You already have every part for this list. 'Order all' makes them again anyway; 'Order missing' would order nothing."
-                    : "'Order all' makes the full 'need' column. 'Order missing' makes only the 'missing' column.", Dim);
+                    parts.Children.Add(Row(part.Missing > 0 ? Warn : Good, (part.Item, 280), (N(part.Need), 100), (N(part.Stock), 110),
+                        (N(part.Incoming), 100), (N(part.Missing), 100)));
+                if (view.Parts.All(p => p.Missing == 0)) Line(parts, Tr.T("parts.haveAll"), Good);
             }
 
             // 3. Problems
             if (view != null && view.Alerts.Count > 0)
             {
-                var problems = Card(view.CanBuild ? "Notes" : "Problems for 'Order all' (blocked)",
-                    view.CanBuild ? null : "Fix these (mine the ore, build the missing crafter, add storage) or make the list smaller with - and the order is allowed again.");
+                var problems = Card(view.CanBuild ? Tr.T("card.notes") : Tr.T("card.problems"),
+                    view.CanBuild ? null : Tr.T("hint.problems"));
                 foreach (var alert in view.Alerts)
                     Line(problems, alert.Text, alert.Level == AlertLevel.Error ? Bad : Warn);
             }
 
             // 4. Orders: progress per part, oldest order first
-            var card = Card("Orders",
-                "Parts are handed to the crafters oldest order first, in batches: every free crafter of the right kind gets a batch, and a crafter that is free again gets the next one. "
-                + "Build as many crafters as you can, more crafters finish a big build sooner. "
-                + "Crafting = a crafter works on it. Waiting = the crafter has it queued but waits for sub-parts from smaller crafters (smelters, refineries) or for earlier jobs. "
-                + "Progress counts parts that arrive in storage.");
-            if (orders.Count == 0) Line(card, "none. Add blocks with + in the G menu, check the parts above, then press Order all or Order missing.", Dim);
+            var card = Card(Tr.T("card.orders"), Tr.T("hint.orders"));
+            if (orders.Count == 0) Line(card, Tr.T("orders.none"), Dim);
             else
             {
+                // The orders' own button sits in their box, so it cannot be taken for one of the list's buttons.
+                // Running orders: "Stop orders". All of them finished (or stopped): the same place says "Remove orders".
+                var over = orders.All(o => o.State == OrderState.Done || o.State == OrderState.Stopped);
+                var stop = MakeButton(Tr.T(over ? "btn.removeOrders" : "btn.stopOrders"), Tr.T(over ? "tip.removeOrders" : "tip.stopOrders"),
+                    () => PlannerEngine.Enqueue(_ => OrderBook.Reset()));
+                stop.HorizontalAlignment = HorizontalAlignment.Right;
+                stop.Height = 28;
+                stop.FontSize = 14;
+                card.Children.Add(stop);
                 var ordered = orders.Sum(o => o.Ordered);
                 var done = orders.Sum(o => o.Done);
                 var finished = orders.Count(o => o.State == OrderState.Done);
@@ -233,11 +301,11 @@ internal class PlannerScreen : ScreenView
                 var headLine = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 6, 0, 4) };
                 headLine.Children.Add(new TextBlock
                 {
-                    Text = allDone ? $"All {orders.Count} parts finished ({N(done)} made)"
-                                   : $"{finished} of {orders.Count} parts finished, {N(done)} of {N(ordered)} made ({(ordered > 0 ? 100 * done / ordered : 0)} %)",
-                    FontSize = 18, Foreground = allDone ? Good : Brushes.White, FontWeight = FontWeight.Bold,
+                    Text = allDone ? Tr.T("orders.allDone", N(done))
+                                   : Tr.T("orders.progress", finished, orders.Count, N(done), N(ordered), ordered > 0 ? 100 * done / ordered : 0),
+                    FontSize = 16, Foreground = allDone ? Good : Brushes.White, FontWeight = FontWeight.Bold,
                 });
-                elapsedText = new TextBlock { Text = OrderBook.ElapsedLabel(), FontSize = 17, Foreground = Dim, HorizontalAlignment = HorizontalAlignment.Right };
+                elapsedText = new TextBlock { Text = OrderBook.ElapsedLabel(), FontSize = 14, Foreground = Dim, HorizontalAlignment = HorizontalAlignment.Right };
                 Grid.SetColumn(elapsedText, 1);
                 headLine.Children.Add(elapsedText);
                 card.Children.Add(headLine);
@@ -259,42 +327,42 @@ internal class PlannerScreen : ScreenView
     {
         var (label, brush) = order.State switch
         {
-            OrderState.Done => ("done", Good),
-            OrderState.Crafting => ("crafting", Busy),
-            OrderState.Queued => ("queued, waiting", Warn),
-            OrderState.WaitingForCrafter => ("waiting for a free crafter", Warn),
-            OrderState.NoProgress => ("no progress", Bad),
-            _ => ("stopped, rest not made", Dim),
+            OrderState.Done => (Tr.T("state.done"), Good),
+            OrderState.Crafting => (Tr.T("state.crafting"), Busy),
+            OrderState.Queued => (Tr.T("state.queued"), Warn),
+            OrderState.WaitingForCrafter => (Tr.T("state.waitCrafter"), Warn),
+            OrderState.NoProgress => (Tr.T("state.noProgress"), Bad),
+            _ => (Tr.T("state.stopped"), Dim),
         };
 
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("34,240,190,150,*"), Margin = new Thickness(0, 8, 0, 0) };
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("30,230,170,140,*"), Margin = new Thickness(0, 5, 0, 0) };
         void Cell(Control control, int column)
         {
             Grid.SetColumn(control, column);
             row.Children.Add(control);
         }
-        Cell(new TextBlock { Text = order.Position + ".", FontSize = 17, Foreground = Dim, VerticalAlignment = VerticalAlignment.Center }, 0);
+        Cell(new TextBlock { Text = order.Position + ".", FontSize = 15, Foreground = Dim, VerticalAlignment = VerticalAlignment.Center }, 0);
         Cell(new TextBlock
         {
-            Text = order.Item, FontSize = 17, Foreground = order.State == OrderState.Done ? Good : Brushes.White,
+            Text = order.Item, FontSize = 15, Foreground = order.State == OrderState.Done ? Good : Brushes.White,
             VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
         }, 1);
         Cell(Bar(order.Ordered > 0 ? (double)order.Done / order.Ordered : 0, order.State == OrderState.Done ? Good : brush, 10), 2);
         Cell(new TextBlock
         {
-            Text = $"{N(order.Done)} / {N(order.Ordered)}", FontSize = 17, Foreground = Brushes.White,
+            Text = $"{N(order.Done)} / {N(order.Ordered)}", FontSize = 15, Foreground = Brushes.White,
             TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0),
         }, 3);
-        Cell(new TextBlock { Text = label, FontSize = 17, Foreground = brush, VerticalAlignment = VerticalAlignment.Center }, 4);
+        Cell(new TextBlock { Text = label, FontSize = 15, Foreground = brush, VerticalAlignment = VerticalAlignment.Center }, 4);
 
         var box = new StackPanel { Spacing = 1 };
         box.Children.Add(row);
         var detail = string.Join("   ", new[] { order.Detail, order.Note }.Where(t => !string.IsNullOrEmpty(t)));
-        if (order.Waiting > 0) detail = (detail.Length > 0 ? detail + "   " : "") + $"{N(order.Waiting)} not queued yet";
+        if (order.Waiting > 0) detail = (detail.Length > 0 ? detail + "   " : "") + Tr.T("orders.notQueued", N(order.Waiting));
         if (detail.Length > 0)
             box.Children.Add(new TextBlock
             {
-                Text = detail, FontSize = 15, Foreground = Dim, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(34, 0, 0, 0),
+                Text = detail, FontSize = 13, Foreground = Dim, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(34, 0, 0, 0),
             });
         return box;
     }
@@ -313,62 +381,23 @@ internal class PlannerScreen : ScreenView
         return bar;
     }
 
-    /// <summary>The offered block: name, how many are in the list, and Add buttons with the three step sizes.</summary>
-    private StackPanel OfferRow(PlannedEntry offered, int inList)
-    {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 2) };
-        row.Children.Add(new TextBlock
-        {
-            Text = offered.Name, Width = 400, FontSize = 18, Foreground = Brushes.White, FontWeight = FontWeight.Bold,
-            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
-        });
-        row.Children.Add(new TextBlock
-        {
-            Text = inList > 0 ? $"{inList:N0} in list" : "not in list", Width = 110, FontSize = 16, Foreground = Dim,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-        foreach (var step in new[] { PlanLimits.Step(offered.Armor, false, false), PlanLimits.Step(offered.Armor, true, false), PlanLimits.Step(offered.Armor, false, true) })
-        {
-            var button = new Button
-            {
-                Content = "Add " + step, Height = 34, Padding = new Thickness(12, 0, 12, 0), FontSize = 17,
-                HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
-            };
-            ToolTip.SetTip(button, $"Put {step} more into the build list (at most {PlanLimits.Max(offered.Armor)} per line).");
-            button.Click += (_, _) =>
-            {
-                try
-                {
-                    var added = PlanStore.AddOffered(offered, step);
-                    if (added < step) PlanStore.Say($"Build Planner: {offered.Name} is at the limit of {PlanLimits.Max(offered.Armor)}");
-                    PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None));
-                    lastDrawn = null;
-                    Redraw();
-                }
-                catch (Exception e) { PluginLog.Error("Planner add button failed: " + e); }
-            };
-            row.Children.Add(button);
-        }
-        return row;
-    }
-
     /// <summary>One build list line: name, [-] count [+] [X]. Shift and Ctrl give the bigger steps.</summary>
     private StackPanel ListRow(PlannedEntry entry)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 1, 0, 1) };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 1, 0, 1) };
         row.Children.Add(new TextBlock
         {
-            Text = entry.Name, Width = 400, FontSize = 17, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center,
+            Text = entry.Name, Width = 380, FontSize = 15, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        row.Children.Add(StepButton("-", "One block less. Shift and Ctrl for bigger steps. At 0 the line leaves the list.", entry, -1));
+        row.Children.Add(StepButton("-", Tr.T("tip.minus"), entry, -1));
         row.Children.Add(new TextBlock
         {
-            Text = entry.Count.ToString("N0"), Width = 70, FontSize = 17, Foreground = Brushes.White,
+            Text = entry.Count.ToString("N0"), Width = 52, FontSize = 15, Foreground = Brushes.White,
             TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         });
-        row.Children.Add(StepButton("+", "One block more. Shift and Ctrl for bigger steps. Stops at the limit.", entry, +1));
-        row.Children.Add(StepButton("X", "Take the line out of the list.", entry, 0));
+        row.Children.Add(StepButton("+", Tr.T("tip.plus"), entry, +1));
+        row.Children.Add(StepButton("X", Tr.T("tip.remove"), entry, 0));
         return row;
     }
 
@@ -376,10 +405,10 @@ internal class PlannerScreen : ScreenView
     {
         var button = new Button
         {
-            Content = text, Width = 40, Height = 34, Padding = new Thickness(0), FontSize = 18,
+            Content = text, Width = 26, Height = 24, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0), FontSize = 13,
             HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
         };
-        ToolTip.SetTip(button, tip);
+        ToolTip.SetTip(button, SmallTip(tip));
         button.Click += (_, _) =>
         {
             try
@@ -392,7 +421,7 @@ internal class PlannerScreen : ScreenView
                 }
                 PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None)); // the checks follow the new list
                 lastDrawn = null;
-                Redraw();
+                Dispatcher.UIThread.Post(Redraw, DispatcherPriority.Background); // the row is rebuilt after its click, not inside it
             }
             catch (Exception e) { PluginLog.Error("Planner list button failed: " + e); }
         };
@@ -405,19 +434,23 @@ internal class PlannerScreen : ScreenView
     private StackPanel Card(string title, string hint = null)
     {
         var inner = new StackPanel { Spacing = 3 };
-        inner.Children.Add(new TextBlock { Text = title, FontSize = 21, Foreground = Head, FontWeight = FontWeight.Bold });
+        inner.Children.Add(new TextBlock { Text = title, FontSize = 18, Foreground = Head, FontWeight = FontWeight.Bold });
         if (!string.IsNullOrEmpty(hint))
-            inner.Children.Add(new TextBlock { Text = hint, FontSize = 15, Foreground = Dim, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+            inner.Children.Add(new TextBlock { Text = hint, FontSize = 13, Foreground = Dim, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 3) });
         content.Children.Add(new Border
         {
-            Child = inner, Margin = new Thickness(0, 6, 0, 6), Padding = new Thickness(16, 10, 16, 14),
+            Child = inner, Margin = new Thickness(0, 4, 0, 4), Padding = new Thickness(12, 8, 12, 10),
             CornerRadius = new CornerRadius(6), Background = CardBack, BorderBrush = CardEdge, BorderThickness = new Thickness(1),
         });
         return inner;
     }
 
+    /// <summary>Tooltips are short hints in a small font, so they never cover much of the window.</summary>
+    private static TextBlock SmallTip(string text)
+        => new() { Text = text, FontSize = 13, MaxWidth = 320, TextWrapping = TextWrapping.Wrap };
+
     private static void Line(Panel panel, string text, IBrush brush)
-        => panel.Children.Add(new TextBlock { Text = text, FontSize = 17, Foreground = brush, TextWrapping = TextWrapping.Wrap });
+        => panel.Children.Add(new TextBlock { Text = text, FontSize = 15, Foreground = brush, TextWrapping = TextWrapping.Wrap });
 
     private static StackPanel Row(IBrush brush, params (string Text, double Width)[] cells)
     {
@@ -425,7 +458,7 @@ internal class PlannerScreen : ScreenView
         for (var i = 0; i < cells.Length; i++)
             row.Children.Add(new TextBlock
             {
-                Text = cells[i].Text, Width = cells[i].Width, FontSize = 17, Foreground = brush,
+                Text = cells[i].Text, Width = cells[i].Width, FontSize = 15, Foreground = brush,
                 TextAlignment = i == 0 || cells[i].Width > 200 ? TextAlignment.Left : TextAlignment.Right,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 Margin = new Thickness(0, 0, 10, 0),

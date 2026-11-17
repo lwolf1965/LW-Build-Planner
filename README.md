@@ -11,15 +11,16 @@ Status: **0.1.0.1, test build, not released.** Single player only. Works alongsi
 - **Checks** before ordering: ore deficit, missing crafter kind, no conveyor link, no storage, not enough cargo space (blocks the order; warning above 80 % of the free capacity).
 - **Follows the orders**: tells you when all crafters of a kind are busy, when an order makes no progress, and when everything is done.
 - Block costs and recipes are read from the game every time a world loads, so mods and game updates are picked up.
+- **In the game's 13 languages**: window, notifications and problem texts (`ClientPlugin/Policy/TrTable.cs`; corrections welcome).
 
 Manual: [Docs/UserManual.md](Docs/UserManual.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Keys
-While the G menu is open:
+Keys:
 | Key | Action |
 |---|---|
 | `+` (also numpad `+`) | add the selected block; Shift and Ctrl for bigger steps |
-| Ctrl+N | open the planner window with the selected block |
+| Ctrl+N | open the planner window (anywhere in a world) |
 
 Everything else (remove, clear, order) is a button in the window, so no stray key press takes blocks off the list or starts crafters.
 
@@ -34,10 +35,10 @@ The plugin is not in the PluginHub yet.
 
 ## Known limits
 - Parts already inside a crafter cannot be cancelled from the planner yet.
-- The build list and the orders are not saved; they are empty after a restart.
+- The build list is saved per world (plugin folder under the game's data folder). Orders are not saved: after a restart the crafters finish their old queues, then "Order missing" orders the rest.
 - Orders go to the crafters of one grid (the one with the most crafters). Storage on other grids counts when those crafters reach it by conveyor.
 - What you carry is not counted, only storage on the conveyor network.
-- `+` and Ctrl+N are fixed and read with a Windows call. Elsewhere the window opens from the plugin's config button.
+- `+` in the G menu is read with a Windows call; Ctrl+N uses the game's own input and works everywhere.
 
 ## For contributors
 Rules: [AGENTS.md](AGENTS.md). `ClientPlugin/Policy` is pure logic (no game types) and is compiled into `tests/`. Everything that touches the world runs on the game thread through `PlannerEngine.Enqueue`.

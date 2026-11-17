@@ -35,8 +35,13 @@ internal static class GPick
     private static FieldInfo uiField;
 
     /// <summary>Called every frame while a terminal screen exists.</summary>
+    /// <summary>True while a terminal / G menu screen exists (its hook ran in the last 0.3 s).</summary>
+    internal static bool TerminalOpen => Environment.TickCount64 - System.Threading.Volatile.Read(ref lastTerminalTick) < 300;
+    private static long lastTerminalTick;
+
     public static void OnTerminalUpdate(object terminalViewModel)
     {
+        System.Threading.Volatile.Write(ref lastTerminalTick, Environment.TickCount64);
         try
         {
             if (!alive)
@@ -120,17 +125,19 @@ internal static class GPick
     /// <summary>+: adds the selected block. Shift and Ctrl give bigger steps, the line's limit is kept.</summary>
     private static void AddSelected(object terminalViewModel)
     {
+        GameLanguage.Refresh(); // the player may have switched the language
         var pick = PickSelected(terminalViewModel);
         if (pick == null)
         {
-            PlanStore.Say("Build Planner: select a block in the G menu first");
+            PlanStore.Say(Tr.T("hud.selectFirst"));
             return;
         }
         var step = PlanLimits.Step(pick.Armor, Down(VkShift), Down(VkControl));
         var added = PlanStore.AddOffered(pick, step);
         var now = PlanStore.CountOf(pick.Key);
-        var capped = added < step ? $", limit {PlanLimits.Max(pick.Armor)}" : "";
-        PlanStore.Say($"Build Planner: {pick.Name} +{added} (now {now}{capped})");
+        PlanStore.Say(added < step
+            ? Tr.T("hud.addedLimit", pick.Name, added, now, PlanLimits.Max(pick.Armor))
+            : Tr.T("hud.added", pick.Name, added, now));
     }
 
     /// <summary>Ctrl+N: remembers the block selected in the G menu (if any) and opens the planner window.</summary>
@@ -193,9 +200,7 @@ internal static class GPick
             var name = Text(Value(kind, "Name"));
             if (string.IsNullOrWhiteSpace(name)) name = Text(Value(tile, "Name"));
             if (string.IsNullOrWhiteSpace(name)) name = NameOf(block);
-            var sizeName = Text(Value(Value(tile, "BlockSize"), "Name"));
-            if (string.IsNullOrWhiteSpace(sizeName)) sizeName = Text(Value(size, "Name"));
-            if (!string.IsNullOrWhiteSpace(sizeName) && !name.Contains(sizeName)) name += " (" + sizeName + ")";
+            // The size ("Block size 1") is not added to the name: it made the names long and the HUD message was cut.
             best = (composite ?? block, block, name);
         }
         return best;

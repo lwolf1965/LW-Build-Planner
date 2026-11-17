@@ -26,7 +26,11 @@ internal static class InputInitPatch
 internal static class SessionUpdatePatch
 {
     // __0 = updateLifetime (positional, so a renamed parameter doesn't break the patch)
-    private static void Postfix(Session __instance, bool __0) => PlannerEngine.OnUpdate(__instance, __0);
+    private static void Postfix(Session __instance, bool __0)
+    {
+        PlannerEngine.OnUpdate(__instance, __0);
+        Hotkeys.OnSessionUpdate(__instance); // Ctrl+N outside the G menu (client session only)
+    }
 }
 
 /// <summary>

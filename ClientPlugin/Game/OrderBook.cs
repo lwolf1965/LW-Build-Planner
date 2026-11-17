@@ -103,7 +103,7 @@ internal static class OrderBook
         var end = finishedAt;
         var span = TimeSpan.FromSeconds(Math.Max(0, (end >= 0 ? end : Clock.Elapsed.TotalSeconds) - start));
         var text = span.TotalHours >= 1 ? span.ToString(@"h\:mm\:ss") : span.ToString(@"m\:ss");
-        return (end >= 0 ? "finished in " : "running ") + text;
+        return Tr.T(end >= 0 ? "elapsed.finished" : "elapsed.running", text);
     }
 
     public static bool TickDue => Ledger.Active && Clock.Elapsed.TotalSeconds - lastTick >= TickSeconds;
@@ -128,11 +128,11 @@ internal static class OrderBook
         var grids = StockScan.Run(context);
         if (grid == null || !grids.TryGetValue(grid, out var scan))
         {
-            if (Ledger.Active) PlanStore.Say("Build Planner: the grid with the orders is gone, orders dropped");
+            if (Ledger.Active) PlanStore.Say(Tr.T("hud.gridGone"));
             Reset();
             return;
         }
-        Process(scan, grids.Values);
+        if (Process(scan, grids.Values)) PlanService.Check(context, OrderMode.None); // the list changed: refresh the view
     }
 
     /// <summary>Stops queueing; what is already in the crafters keeps running.</summary>
@@ -141,13 +141,14 @@ internal static class OrderBook
         Ledger.StopWaiting();
         Notes.Clear();
         Publish();
-        PlanStore.Say("Build Planner: waiting parts dropped (crafters finish what they have)");
+        PlanStore.Say(Tr.T("hud.waitingDropped"));
     }
 
     /// <summary>Forgets all orders (the crafters keep what is in their queues).</summary>
     public static void Reset()
     {
         if (Ledger.Active) PluginLog.Info("Orders cleared.");
+        PlanStore.ForgetOrdered(); // stopped or removed before they were done: the list stays
         Ledger.Clear();
         Notes.Clear();
         LastStock.Clear();
@@ -182,8 +183,10 @@ internal static class OrderBook
         return id;
     }
 
-    private static void Process(GridStock scan, IEnumerable<GridStock> allGrids)
+    /// <summary>One pass over the crafters. Returns true when the last orders just finished (list and orders were cleared).</summary>
+    private static bool Process(GridStock scan, IEnumerable<GridStock> allGrids)
     {
+        GameLanguage.Refresh(); // messages of this tick in the language the player uses now
         var makers = scan.Makers.Where(m => !unlinked.Contains(m.Entity)).ToList();
         var byId = makers.ToDictionary(IdOf, m => m);
         crafting = byId.Where(p => CrafterApi.IsCrafting(p.Value.Converter)).Select(p => p.Key).ToHashSet();
@@ -228,7 +231,7 @@ internal static class OrderBook
             if (now - (LastProgress.TryGetValue(itemId, out var last) ? last : now) < StuckSeconds) continue;
             Notes[itemId] = NoProgressNote;
             if (Told.Add("stuck:" + itemId))
-                PlanStore.Say($"Build Planner: {NameOf(itemId)} is not progressing. Check ore and sub-parts, or clear the orders.");
+                PlanStore.Say(Tr.T("hud.noProgress", NameOf(itemId)));
         }
 
         // 3. Waiting parts go to the free crafters in batches, oldest order first (see Policy/Dispatch.cs).
@@ -249,7 +252,7 @@ internal static class OrderBook
             if (able.Count == 0)
             {
                 Ledger.DropWaiting(itemId);
-                PlanStore.Say($"Build Planner: no crafter here can make {NameOf(itemId)}, dropped");
+                PlanStore.Say(Tr.T("hud.noCrafter", NameOf(itemId)));
                 continue;
             }
             ableOf[itemId] = (able.Count, able[0].Maker.Machine);
@@ -270,7 +273,7 @@ internal static class OrderBook
             var want = wants.First(w => w.Item == job.Item);
             var ok = OrderJob.DryRun || CrafterApi.Enqueue(maker.Converter, recipes[(job.Crafter, job.Item)], job.Crafts);
             PluginLog.Info($"{(OrderJob.DryRun ? "DRY RUN: would queue" : "Queued")} batch of {job.Crafts} x {NameOf(job.Item)} in '{maker.Name}' ({(ok ? "ok" : "refused")}), {Ledger.Waiting.GetValueOrDefault(job.Item)} waiting");
-            if (!ok) { Notes[job.Item] = $"'{maker.Name}' refused the order (queue full?)"; continue; }
+            if (!ok) { Notes[job.Item] = Tr.T("note.refused", maker.Name); continue; }
             Ledger.MarkQueued(job.Crafter, job.Item, (long)Math.Ceiling(job.Crafts * want.PerCraft));
             IdleSince.Remove(job.Crafter);
             LastProgress[job.Item] = now;
@@ -288,15 +291,26 @@ internal static class OrderBook
         foreach (var want in wants.Where(w => Ledger.Waiting.ContainsKey(w.Item) && jobs.All(j => j.Item != w.Item)))
         {
             var (count, machine) = ableOf[want.Item];
-            Notes[want.Item] = free.Any(id => want.Able.Contains(id)) ? "" : $"all {count} {machine}(s) busy";
+            Notes[want.Item] = free.Any(id => want.Able.Contains(id)) ? "" : Tr.T("note.busy", count, machine);
             LastProgress[want.Item] = now;
             if (!free.Any(id => want.Able.Contains(id)) && Told.Add("busy:" + machine))
-                PlanStore.Say($"Build Planner: all {count} {machine}(s) are busy, {Ledger.Waiting[want.Item]} {NameOf(want.Item)} waiting. More {machine}s would finish sooner.");
+                PlanStore.Say(Tr.T("hud.busy", count, machine, Ledger.Waiting[want.Item], NameOf(want.Item)));
         }
 
-        if (wasActive && !Ledger.Active) PlanStore.SayDone("Build Planner: all ordered parts are done");
+        if (wasActive && !Ledger.Active)
+        {
+            // All orders are done, so the build is ready: the ordered blocks leave the build list and the orders are
+            // removed, so a finished build is not ordered twice by mistake. Stopped orders never get here (Reset clears
+            // wasActive), and their list stays.
+            var taken = PlanStore.TakeOrdered();
+            PlanStore.SayDone(Tr.T("hud.done"));
+            PluginLog.Info($"All orders done: {taken} block(s) taken off the build list, orders removed.");
+            Reset();
+            return true;
+        }
         wasActive = Ledger.Active;
         Publish();
+        return false;
     }
 
     private static string NameOf(string itemId) => Items.TryGetValue(itemId, out var item) ? OrderJob.NameOf(item) : itemId;
@@ -329,9 +343,9 @@ internal static class OrderBook
                 Waiting = waiting,
                 Queued = queued,
                 State = state,
-                Detail = string.Join("; ", mine.Select(q =>
-                    $"{(CrafterNames.TryGetValue(q.Crafter, out var name) ? name : "?")}: {q.Amount:N0} left, "
-                    + (crafting.Contains(q.Crafter) ? "crafting" : "waiting (sub-parts or earlier jobs)"))),
+                Detail = string.Join("; ", mine.Select(q => Tr.T("detail.line",
+                    CrafterNames.TryGetValue(q.Crafter, out var name) ? name : "?", q.Amount.ToString("N0"),
+                    Tr.T(crafting.Contains(q.Crafter) ? "detail.crafting" : "detail.waiting")))),
                 Note = note == NoProgressNote ? "" : note,
             });
         }
