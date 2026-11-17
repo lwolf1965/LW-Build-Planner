@@ -31,6 +31,9 @@ public sealed class PlanFacts
 
 public static class PlanAlerts
 {
+    /// <summary>Share of the free capacity above which the cargo check warns.</summary>
+    public const double TightShare = 0.8;
+
     private static string N(long n) => n.ToString("N0", CultureInfo.InvariantCulture);
 
     /// <summary>The problems that stop or weaken a build, errors first. No Error means the build can go ahead.</summary>
@@ -95,7 +98,7 @@ public static class PlanAlerts
         var most = biggest == null ? "" : $" Heaviest: {nameOf(biggest)}.";
         if (need > free)
             return new PlanAlert { Level = AlertLevel.Error, Text = $"Not enough cargo space: the new parts weigh {take}, only {room} is free in storage.{most} Add storage or empty some." };
-        if (need > 0.8 * free)
+        if (need > TightShare * free)
             return new PlanAlert { Level = AlertLevel.Warning, Text = $"Cargo space gets tight: the new parts weigh {take} of {room} free.{most}" };
         return null;
     }

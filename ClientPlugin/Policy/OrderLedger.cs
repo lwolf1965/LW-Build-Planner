@@ -13,15 +13,36 @@ namespace ClientPlugin.Policy;
 /// An order is plain: "order all" makes every part of the build list, whatever is in stock; "order missing" makes
 /// only what storage and the running orders do not cover. Nothing is reserved behind the
 /// player's back: what the window shows is what is counted.
+/// The ledger also keeps the history of the running batch (what was ordered per part, in the order it was ordered,
+/// and how much of it is finished) so the window can show progress. The history ends when the next order starts
+/// after everything finished, or when the orders are cleared.
 /// </summary>
 public sealed class OrderLedger
 {
     private readonly Dictionary<string, long> waiting = new();
     private readonly Dictionary<(int Crafter, string Item), long> queued = new();
+    private readonly Dictionary<string, long> ordered = new();
+    private readonly Dictionary<string, long> doneCount = new();
+    private readonly List<string> sequence = new();
 
     public IReadOnlyDictionary<string, long> Waiting => waiting;
 
+    /// <summary>Parts of the running (or last finished) batch, oldest order first.</summary>
+    public IReadOnlyList<string> Sequence => sequence;
+
+    /// <summary>Everything ordered of this part in the batch.</summary>
+    public long Ordered(string item) => ordered.TryGetValue(item, out var o) ? o : 0;
+
+    /// <summary>Parts of this item that arrived from the queued lines, never more than was ordered.</summary>
+    public long Done(string item) => Math.Min(Ordered(item), doneCount.TryGetValue(item, out var d) ? d : 0);
+
+    /// <summary>The waiting parts, oldest order first: the crafters get them in this order.</summary>
+    public IEnumerable<string> WaitingOrder() => sequence.Where(waiting.ContainsKey);
+
     public long QueuedOf(string item) => queued.Where(q => q.Key.Item == item).Sum(q => q.Value);
+
+    /// <summary>Parts still counted as queued in this crafter, whatever the item.</summary>
+    public long QueuedOfCrafter(int crafter) => queued.Where(q => q.Key.Crafter == crafter).Sum(q => q.Value);
 
     /// <summary>Not in stock yet but on its way: waiting + queued.</summary>
     public long Incoming(string item) => (waiting.TryGetValue(item, out var w) ? w : 0) + QueuedOf(item);
@@ -66,8 +87,21 @@ public sealed class OrderLedger
     /// <summary>Records an order: its parts wait for a crafter.</summary>
     public void Commit(IReadOnlyDictionary<string, long> need)
     {
+        if (!Active) ClearHistory(); // the last batch is finished: a new one starts
         foreach (var n in need)
-            if (n.Value > 0) waiting[n.Key] = (waiting.TryGetValue(n.Key, out var w) ? w : 0) + n.Value;
+        {
+            if (n.Value <= 0) continue;
+            waiting[n.Key] = (waiting.TryGetValue(n.Key, out var w) ? w : 0) + n.Value;
+            ordered[n.Key] = Ordered(n.Key) + n.Value;
+            if (!sequence.Contains(n.Key)) sequence.Add(n.Key);
+        }
+    }
+
+    private void ClearHistory()
+    {
+        ordered.Clear();
+        doneCount.Clear();
+        sequence.Clear();
     }
 
     /// <summary>Parts were queued in a crafter: they leave Waiting (a craft may make more than was waiting).</summary>
@@ -81,16 +115,19 @@ public sealed class OrderLedger
     }
 
     /// <summary>
-    /// Parts of this item arrived in stock: they are taken off the queued lines (lowest crafter id first).
+    /// Parts of this item arrived in stock: they are taken off the queued lines. The crafters in idleFirst (not crafting
+    /// now, so most likely the ones that finished) are credited first, then the lowest crafter id.
     /// Returns what was left over (more arrived than was on order).
     /// </summary>
-    public long Arrived(string item, long amount)
+    public long Arrived(string item, long amount, IReadOnlyCollection<int> idleFirst = null)
     {
-        foreach (var key in queued.Keys.Where(k => k.Item == item).OrderBy(k => k.Crafter).ToList())
+        foreach (var key in queued.Keys.Where(k => k.Item == item)
+                     .OrderBy(k => idleFirst != null && idleFirst.Contains(k.Crafter) ? 0 : 1).ThenBy(k => k.Crafter).ToList())
         {
             if (amount <= 0) break;
             var take = Math.Min(queued[key], amount);
             amount -= take;
+            doneCount[item] = (doneCount.TryGetValue(item, out var d) ? d : 0) + take;
             if (queued[key] - take > 0) queued[key] -= take;
             else queued.Remove(key);
         }
@@ -116,6 +153,7 @@ public sealed class OrderLedger
     {
         waiting.Clear();
         queued.Clear();
+        ClearHistory();
     }
 }
 

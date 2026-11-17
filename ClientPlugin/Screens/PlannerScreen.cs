@@ -14,11 +14,15 @@ using Keen.VRage.UI.Screens;
 namespace ClientPlugin.Screens;
 
 /// <summary>
-/// The planner window: build list, parts check (need / stock / reserved / incoming / to order), alerts, running orders.
-/// Opened with Home from the G menu or from the plugin's config button in Pulsar.
+/// The planner window: build list, parts check (need / stock / on order / missing), problems, and the progress of the
+/// running order (per part: done / ordered, status, and what each crafter still has).
+/// Opened with Ctrl+N from the G menu (bringing the selected block along) or from the plugin's config button in Pulsar.
+/// In the G menu + adds blocks directly; in the window every change is a button.
+/// Every change to the list is made here with buttons, never with stray keys.
 /// The window only shows snapshots (PlanStore, PlanService.LastView, OrderBook.Lines) and queues actions for the game
 /// thread; it never touches the world. Redrawn once a second while open.
-/// Layout: Grid with the list in a ScrollViewer in the * row, so the buttons always stay on screen.
+/// Layout: Grid with the cards in a ScrollViewer in the * row, so the buttons always stay on screen. The window is
+/// redrawn only when its data changed, and the scroll position is put back afterwards, so reading a long order is calm.
 /// </summary>
 internal class PlannerScreen : ScreenView
 {
@@ -27,9 +31,15 @@ internal class PlannerScreen : ScreenView
     private static readonly IBrush Bad = new SolidColorBrush(Color.FromRgb(255, 110, 100));
     private static readonly IBrush Warn = new SolidColorBrush(Color.FromRgb(255, 200, 90));
     private static readonly IBrush Good = new SolidColorBrush(Color.FromRgb(130, 220, 140));
+    private static readonly IBrush Busy = new SolidColorBrush(Color.FromRgb(110, 185, 255));
+    private static readonly IBrush Track = new SolidColorBrush(Color.FromArgb(130, 70, 82, 92));
+    private static readonly IBrush CardBack = new SolidColorBrush(Color.FromArgb(120, 22, 30, 36));
+    private static readonly IBrush CardEdge = new SolidColorBrush(Color.FromArgb(150, 70, 96, 116));
 
     private static bool open;
     private StackPanel content;
+    private ScrollViewer scroll;
+    private TextBlock elapsedText;
     private DispatcherTimer timer;
     private Button orderAll;
     private string lastDrawn;
@@ -73,7 +83,7 @@ internal class PlannerScreen : ScreenView
         titleBar.Children.Add(close);
 
         content = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2, Margin = new Thickness(12, 8, 12, 8) };
-        var scroll = new ScrollViewer
+        scroll = new ScrollViewer
         {
             Content = content, Margin = new Thickness(0, 12, 0, 12),
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -153,54 +163,89 @@ internal class PlannerScreen : ScreenView
     {
         try
         {
+            if (elapsedText != null) elapsedText.Text = OrderBook.ElapsedLabel(); // the clock runs without a rebuild
+
             var plan = PlanStore.Snapshot().OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            var offered = PlanStore.Offered;
             var view = PlanService.LastView;
             var orders = OrderBook.Lines;
             // Nothing goes to the crafters while the check finds a problem (ore deficit, no crafter, no room ...).
             orderAll.IsEnabled = plan.Count > 0 && view != null && view.CanBuild;
 
             // Rebuild only when something changed, so hovering and scrolling are not disturbed every second.
-            var stamp = string.Join("|", plan.Select(p => p.Name + p.Count)) + "#" + view?.Time.Ticks + "#"
-                        + string.Join("|", orders.Select(o => o.Item + o.Waiting + "/" + o.Queued + o.Crafters + o.Note));
+            var stamp = offered?.Name + "#" + string.Join("|", plan.Select(p => p.Name + p.Count)) + "#" + view?.Time.Ticks + "#"
+                        + string.Join("|", orders.Select(o => $"{o.Item}{o.Done}/{o.Ordered}/{o.Waiting}/{o.Queued}/{o.State}{o.Detail}{o.Note}"));
             if (stamp == lastDrawn) return;
             lastDrawn = stamp;
+
+            var offset = scroll.Offset;
             content.Children.Clear();
+            elapsedText = null;
 
-            Section("Build list   (add blocks in the G menu with =; here - and + change the count, Shift and Ctrl for bigger steps)");
-            if (plan.Count == 0) Line("empty", Dim);
-            foreach (var entry in plan) content.Children.Add(ListRow(entry));
-            if (plan.Count > 0) Line("A line that reaches 0 leaves the list. Limits per line: armor 1000, other blocks 50.", Dim);
+            // 0. The block brought from the G menu with Ctrl+N
+            var pick = Card("Selected block", "The block last selected in the G menu (with + or Ctrl+N). Add more of it with the buttons.");
+            if (offered == null) Line(pick, "none yet", Dim);
+            else pick.Children.Add(OfferRow(offered, plan.FirstOrDefault(p => ReferenceEquals(p.Key, offered.Key))?.Count ?? 0));
 
-            Section("Parts" + (view == null ? "" : $"   (checked {view.Time:HH:mm:ss}{(string.IsNullOrEmpty(view.Grid) ? "" : ", " + view.Grid)})"));
-            if (view == null) Line("checking ...", Dim);
-            else if (view.Parts.Count == 0) Line("nothing to check", Dim);
+            // 1. Build list
+            var list = Card("Build list", "- and + change the count (Shift and Ctrl for bigger steps); a line at 0 leaves the list, X removes it. Limits per line: armor 1000, other blocks 50.");
+            if (plan.Count == 0) Line(list, "empty", Dim);
+            foreach (var entry in plan) list.Children.Add(ListRow(entry));
+
+            // 2. Parts
+            var parts = Card("Parts" + (view == null ? "" : $"   (checked {view.Time:HH:mm:ss}{(string.IsNullOrEmpty(view.Grid) ? "" : ", " + view.Grid)})"),
+                "need = what the list uses; in storage = what the crafters can reach now; on order = already being made; missing = need - storage - on order.");
+            if (view == null) Line(parts, "checking ...", Dim);
+            else if (view.Parts.Count == 0) Line(parts, "nothing to check", Dim);
             else
             {
-                content.Children.Add(Row(Dim, ("part", 300), ("need", 110), ("in storage", 110), ("on order", 110), ("missing", 110)));
+                parts.Children.Add(Row(Dim, ("part", 300), ("need", 110), ("in storage", 110), ("on order", 110), ("missing", 110)));
                 foreach (var part in view.Parts)
-                    content.Children.Add(Row(part.Missing > 0 ? Warn : Good, (part.Item, 300), (N(part.Need), 110), (N(part.Stock), 110),
+                    parts.Children.Add(Row(part.Missing > 0 ? Warn : Good, (part.Item, 300), (N(part.Need), 110), (N(part.Stock), 110),
                         (N(part.Incoming), 110), (N(part.Missing), 110)));
-                Line(view.Parts.All(p => p.Missing == 0)
+                Line(parts, view.Parts.All(p => p.Missing == 0)
                     ? "You already have every part for this list. 'Order all' makes them again anyway; 'Order missing' would order nothing."
                     : "'Order all' makes the full 'need' column. 'Order missing' makes only the 'missing' column.", Dim);
             }
 
+            // 3. Problems
             if (view != null && view.Alerts.Count > 0)
             {
-                Section(view.CanBuild ? "Notes" : "Problems for 'Order all' (blocked)");
+                var problems = Card(view.CanBuild ? "Notes" : "Problems for 'Order all' (blocked)",
+                    view.CanBuild ? null : "Fix these (mine the ore, build the missing crafter, add storage) or make the list smaller with - and the order is allowed again.");
                 foreach (var alert in view.Alerts)
-                    Line(alert.Text, alert.Level == AlertLevel.Error ? Bad : Warn);
+                    Line(problems, alert.Text, alert.Level == AlertLevel.Error ? Bad : Warn);
             }
 
-            Section("Orders");
-            if (orders.Count == 0) Line("none", Dim);
+            // 4. Orders: progress per part, oldest order first
+            var card = Card("Orders",
+                "Parts are handed to the crafters oldest order first, in batches: every free crafter of the right kind gets a batch, and a crafter that is free again gets the next one. "
+                + "Build as many crafters as you can, more crafters finish a big build sooner. "
+                + "Crafting = a crafter works on it. Waiting = the crafter has it queued but waits for sub-parts from smaller crafters (smelters, refineries) or for earlier jobs. "
+                + "Progress counts parts that arrive in storage.");
+            if (orders.Count == 0) Line(card, "none. Add blocks with + in the G menu, check the parts above, then press Order all or Order missing.", Dim);
             else
             {
-                content.Children.Add(Row(Dim, ("part", 250), ("waiting", 92), ("in crafters", 92), ("where / why", 400)));
-                foreach (var order in orders)
-                    content.Children.Add(Row(order.Waiting > 0 ? Warn : Brushes.White, (order.Item, 250), (N(order.Waiting), 92), (N(order.Queued), 92),
-                        (string.IsNullOrEmpty(order.Note) ? order.Crafters : order.Crafters + (order.Crafters.Length > 0 ? "; " : "") + order.Note, 400)));
+                var ordered = orders.Sum(o => o.Ordered);
+                var done = orders.Sum(o => o.Done);
+                var finished = orders.Count(o => o.State == OrderState.Done);
+                var allDone = finished == orders.Count;
+                var headLine = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 6, 0, 4) };
+                headLine.Children.Add(new TextBlock
+                {
+                    Text = allDone ? $"All {orders.Count} parts finished ({N(done)} made)"
+                                   : $"{finished} of {orders.Count} parts finished, {N(done)} of {N(ordered)} made ({(ordered > 0 ? 100 * done / ordered : 0)} %)",
+                    FontSize = 18, Foreground = allDone ? Good : Brushes.White, FontWeight = FontWeight.Bold,
+                });
+                elapsedText = new TextBlock { Text = OrderBook.ElapsedLabel(), FontSize = 17, Foreground = Dim, HorizontalAlignment = HorizontalAlignment.Right };
+                Grid.SetColumn(elapsedText, 1);
+                headLine.Children.Add(elapsedText);
+                card.Children.Add(headLine);
+                card.Children.Add(Bar(ordered > 0 ? (double)done / ordered : 0, allDone ? Good : Busy, 16));
+                foreach (var order in orders) card.Children.Add(OrderRow(order));
             }
+
+            if (offset.Y > 0) Dispatcher.UIThread.Post(() => scroll.Offset = offset, DispatcherPriority.Background);
         }
         catch (Exception e)
         {
@@ -209,7 +254,105 @@ internal class PlannerScreen : ScreenView
         }
     }
 
-    /// <summary>One build list line: name, [-] count [+] [X]. The buttons use the same steps as the G menu keys.</summary>
+    /// <summary>One ordered part: position, name, progress bar, done / ordered, status; under it what each crafter still has.</summary>
+    private static Control OrderRow(OrderLine order)
+    {
+        var (label, brush) = order.State switch
+        {
+            OrderState.Done => ("done", Good),
+            OrderState.Crafting => ("crafting", Busy),
+            OrderState.Queued => ("queued, waiting", Warn),
+            OrderState.WaitingForCrafter => ("waiting for a free crafter", Warn),
+            OrderState.NoProgress => ("no progress", Bad),
+            _ => ("stopped, rest not made", Dim),
+        };
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("34,240,190,150,*"), Margin = new Thickness(0, 8, 0, 0) };
+        void Cell(Control control, int column)
+        {
+            Grid.SetColumn(control, column);
+            row.Children.Add(control);
+        }
+        Cell(new TextBlock { Text = order.Position + ".", FontSize = 17, Foreground = Dim, VerticalAlignment = VerticalAlignment.Center }, 0);
+        Cell(new TextBlock
+        {
+            Text = order.Item, FontSize = 17, Foreground = order.State == OrderState.Done ? Good : Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        }, 1);
+        Cell(Bar(order.Ordered > 0 ? (double)order.Done / order.Ordered : 0, order.State == OrderState.Done ? Good : brush, 10), 2);
+        Cell(new TextBlock
+        {
+            Text = $"{N(order.Done)} / {N(order.Ordered)}", FontSize = 17, Foreground = Brushes.White,
+            TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0),
+        }, 3);
+        Cell(new TextBlock { Text = label, FontSize = 17, Foreground = brush, VerticalAlignment = VerticalAlignment.Center }, 4);
+
+        var box = new StackPanel { Spacing = 1 };
+        box.Children.Add(row);
+        var detail = string.Join("   ", new[] { order.Detail, order.Note }.Where(t => !string.IsNullOrEmpty(t)));
+        if (order.Waiting > 0) detail = (detail.Length > 0 ? detail + "   " : "") + $"{N(order.Waiting)} not queued yet";
+        if (detail.Length > 0)
+            box.Children.Add(new TextBlock
+            {
+                Text = detail, FontSize = 15, Foreground = Dim, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(34, 0, 0, 0),
+            });
+        return box;
+    }
+
+    /// <summary>A flat progress bar: a dark track with a coloured fill of the given fraction (0..1).</summary>
+    private static Control Bar(double fraction, IBrush fill, double height)
+    {
+        fraction = Math.Max(0, Math.Min(1, fraction));
+        var bar = new Grid { Height = height, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 12, 2) };
+        bar.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(fraction, GridUnitType.Star)));
+        bar.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(1 - fraction, GridUnitType.Star)));
+        var back = new Border { Background = Track, CornerRadius = new CornerRadius(height / 2) };
+        Grid.SetColumnSpan(back, 2);
+        bar.Children.Add(back);
+        bar.Children.Add(new Border { Background = fill, CornerRadius = new CornerRadius(height / 2) });
+        return bar;
+    }
+
+    /// <summary>The offered block: name, how many are in the list, and Add buttons with the three step sizes.</summary>
+    private StackPanel OfferRow(PlannedEntry offered, int inList)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 2) };
+        row.Children.Add(new TextBlock
+        {
+            Text = offered.Name, Width = 400, FontSize = 18, Foreground = Brushes.White, FontWeight = FontWeight.Bold,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        row.Children.Add(new TextBlock
+        {
+            Text = inList > 0 ? $"{inList:N0} in list" : "not in list", Width = 110, FontSize = 16, Foreground = Dim,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        foreach (var step in new[] { PlanLimits.Step(offered.Armor, false, false), PlanLimits.Step(offered.Armor, true, false), PlanLimits.Step(offered.Armor, false, true) })
+        {
+            var button = new Button
+            {
+                Content = "Add " + step, Height = 34, Padding = new Thickness(12, 0, 12, 0), FontSize = 17,
+                HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+            };
+            ToolTip.SetTip(button, $"Put {step} more into the build list (at most {PlanLimits.Max(offered.Armor)} per line).");
+            button.Click += (_, _) =>
+            {
+                try
+                {
+                    var added = PlanStore.AddOffered(offered, step);
+                    if (added < step) PlanStore.Say($"Build Planner: {offered.Name} is at the limit of {PlanLimits.Max(offered.Armor)}");
+                    PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None));
+                    lastDrawn = null;
+                    Redraw();
+                }
+                catch (Exception e) { PluginLog.Error("Planner add button failed: " + e); }
+            };
+            row.Children.Add(button);
+        }
+        return row;
+    }
+
+    /// <summary>One build list line: name, [-] count [+] [X]. Shift and Ctrl give the bigger steps.</summary>
     private StackPanel ListRow(PlannedEntry entry)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 1, 0, 1) };
@@ -258,11 +401,23 @@ internal class PlannerScreen : ScreenView
 
     private static string N(long value) => value.ToString("N0");
 
-    private void Section(string text)
-        => content.Children.Add(new TextBlock { Text = text, FontSize = 20, Foreground = Head, Margin = new Thickness(0, 14, 0, 4) });
+    /// <summary>A titled box in the scrolling list; the returned panel takes the rows. The hint explains what the box shows.</summary>
+    private StackPanel Card(string title, string hint = null)
+    {
+        var inner = new StackPanel { Spacing = 3 };
+        inner.Children.Add(new TextBlock { Text = title, FontSize = 21, Foreground = Head, FontWeight = FontWeight.Bold });
+        if (!string.IsNullOrEmpty(hint))
+            inner.Children.Add(new TextBlock { Text = hint, FontSize = 15, Foreground = Dim, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+        content.Children.Add(new Border
+        {
+            Child = inner, Margin = new Thickness(0, 6, 0, 6), Padding = new Thickness(16, 10, 16, 14),
+            CornerRadius = new CornerRadius(6), Background = CardBack, BorderBrush = CardEdge, BorderThickness = new Thickness(1),
+        });
+        return inner;
+    }
 
-    private void Line(string text, IBrush brush)
-        => content.Children.Add(new TextBlock { Text = text, FontSize = 17, Foreground = brush, TextWrapping = TextWrapping.Wrap });
+    private static void Line(Panel panel, string text, IBrush brush)
+        => panel.Children.Add(new TextBlock { Text = text, FontSize = 17, Foreground = brush, TextWrapping = TextWrapping.Wrap });
 
     private static StackPanel Row(IBrush brush, params (string Text, double Width)[] cells)
     {

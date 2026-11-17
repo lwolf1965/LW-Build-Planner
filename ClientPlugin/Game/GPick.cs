@@ -11,12 +11,10 @@ using Keen.Game2.Simulation.WorldObjects.Items;
 namespace ClientPlugin.Game;
 
 /// <summary>
-/// First usable planner, no screen of its own: keys while the terminal / G menu is open.
-///   = / + (or Insert) add the selected block to the build list
-///   -                 take it off again
-///                     steps: armor 1, Shift 10, Ctrl 100 (at most 1000); other blocks 1, Shift 5, Ctrl 10 (at most 50)
-///   Home              open the planner window (list, parts check, alerts, orders, Order button)
-///   End               clear the build list
+/// Keys while the terminal / G menu is open:
+///   +       adds the selected block to the build list (Shift and Ctrl for bigger steps); + and numpad + both work
+///   Ctrl+N  opens the planner window and brings the selected block along (PlanStore.Offered)
+/// Nothing else is a key: removing, clearing and ordering are buttons in the window.
 /// Runs on the UI thread, from the postfix of TerminalScreenViewModel.Update (see Patches).
 /// Reads the game's view models through fields only (no property getters, so nothing is created or changed).
 /// Selected block (Game2.Client, from the probe): GScreenViewModel.TileDetail is a BlockTileDetailViewModel whose
@@ -24,14 +22,17 @@ namespace ClientPlugin.Game;
 /// </summary>
 internal static class GPick
 {
-    private const int VkInsert = 0x2D, VkHome = 0x24, VkEnd = 0x23, VkShift = 0x10, VkControl = 0x11;
-    private const int VkNumPlus = 0x6B, VkPlus = 0xBB, VkNumMinus = 0x6D, VkMinus = 0xBD;
+    private const int VkN = 0x4E, VkShift = 0x10, VkControl = 0x11, VkAlt = 0x12, VkPlus = 0xBB, VkNumPlus = 0x6B;
 
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
-    private static bool insertLast, numPlusLast, plusLast, numMinusLast, minusLast, homeLast, endLast, keysUnavailable, alive;
+    private static bool nLast, plusLast, numPlusLast, keysUnavailable, alive;
+
+    // The HUD field is looked up once per view model type, not every frame.
+    private static Type uiFieldOwner;
+    private static FieldInfo uiField;
 
     /// <summary>Called every frame while a terminal screen exists.</summary>
     public static void OnTerminalUpdate(object terminalViewModel)
@@ -41,28 +42,23 @@ internal static class GPick
             if (!alive)
             {
                 alive = true;
-                PluginLog.Info("Terminal hook alive: = adds the selected block, - removes, Home opens the planner window, End clears the list.");
+                PluginLog.Info("Terminal hook alive: + adds the selected block (Shift / Ctrl bigger steps), Ctrl+N opens the planner window.");
             }
 
-            var ui = Reflect.Get(Reflect.Field(terminalViewModel.GetType(), "_inGameUI"), terminalViewModel);
+            var viewModelType = terminalViewModel.GetType();
+            if (uiFieldOwner != viewModelType) { uiFieldOwner = viewModelType; uiField = Reflect.Field(viewModelType, "_inGameUI"); }
+            var ui = Reflect.Get(uiField, terminalViewModel);
             for (var shown = 0; shown < 3 && PlanStore.Messages.TryDequeue(out var message); shown++)
                 HudNotify.Show(ui, message);
 
             if (keysUnavailable || !GameHasFocus()) return;
-            // Every key is read each frame (no short-circuit), so a held key never fires twice.
-            var insert = Edge(VkInsert, ref insertLast) | Edge(VkNumPlus, ref numPlusLast) | Edge(VkPlus, ref plusLast);
-            var minus = Edge(VkNumMinus, ref numMinusLast) | Edge(VkMinus, ref minusLast);
-            var home = Edge(VkHome, ref homeLast);
-            var end = Edge(VkEnd, ref endLast);
-
-            if (insert) AddSelected(terminalViewModel, 1);
-            if (minus) AddSelected(terminalViewModel, -1);
-            if (end)
-            {
-                PlanStore.Clear();
-                PlanStore.Say("Build Planner: list cleared");
-            }
-            if (home) Screens.PlannerScreen.Open();
+            // N is read every frame, so holding Ctrl+N opens the window once.
+            // Every key is read each frame (no short-circuit), so a held key fires once.
+            var n = Edge(VkN, ref nLast);
+            var plus = Edge(VkPlus, ref plusLast) | Edge(VkNumPlus, ref numPlusLast);
+            if (Down(VkAlt)) return;
+            if (n && Down(VkControl) && !Down(VkShift)) OpenWithSelected(terminalViewModel);
+            else if (plus) AddSelected(terminalViewModel);
         }
         catch (DllNotFoundException)
         {
@@ -78,7 +74,11 @@ internal static class GPick
     private static bool Down(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
 
     /// <summary>Shift and Ctrl right now, for the planner window's +/- buttons (same bigger steps as the G menu keys).</summary>
-    internal static (bool Shift, bool Ctrl) Modifiers() => (Down(VkShift), Down(VkControl));
+    internal static (bool Shift, bool Ctrl) Modifiers()
+    {
+        try { return (Down(VkShift), Down(VkControl)); }
+        catch (DllNotFoundException) { return (false, false); } // no user32 (not Windows): the buttons still work, with the small step
+    }
 
     private static bool Edge(int vk, ref bool last)
     {
@@ -94,15 +94,12 @@ internal static class GPick
         return processId == (uint)Environment.ProcessId;
     }
 
-    private static void AddSelected(object terminalViewModel, int sign)
+    /// <summary>The block selected in the G menu, or null. It also becomes the window's offered block.</summary>
+    private static PlannedEntry PickSelected(object terminalViewModel)
     {
         var gScreen = Reflect.Get(Reflect.Field(terminalViewModel.GetType(), "_ownedGScreen"), terminalViewModel)
                       ?? Reflect.Get(Reflect.Property(terminalViewModel.GetType(), "GScreen"), terminalViewModel);
-        if (gScreen == null)
-        {
-            PlanStore.Say("Build Planner: open the G menu and select a block first");
-            return;
-        }
+        if (gScreen == null) return null;
 
         var pick = SelectedBlock(gScreen);
         if (pick.Block == null)
@@ -114,20 +111,33 @@ internal static class GPick
             var first = found.FirstOrDefault()?.Block;
             if (first != null) pick = (first, first, NameOf(first));
         }
-        if (pick.Block == null)
+        if (pick.Block == null) return null;
+        var offered = new PlannedEntry { Key = pick.Key, Name = pick.Name, Block = pick.Block, Armor = PlanStore.IsArmor(pick.Block) };
+        PlanStore.Offered = offered;
+        return offered;
+    }
+
+    /// <summary>+: adds the selected block. Shift and Ctrl give bigger steps, the line's limit is kept.</summary>
+    private static void AddSelected(object terminalViewModel)
+    {
+        var pick = PickSelected(terminalViewModel);
+        if (pick == null)
         {
             PlanStore.Say("Build Planner: select a block in the G menu first");
             return;
         }
+        var step = PlanLimits.Step(pick.Armor, Down(VkShift), Down(VkControl));
+        var added = PlanStore.AddOffered(pick, step);
+        var now = PlanStore.CountOf(pick.Key);
+        var capped = added < step ? $", limit {PlanLimits.Max(pick.Armor)}" : "";
+        PlanStore.Say($"Build Planner: {pick.Name} +{added} (now {now}{capped})");
+    }
 
-        // Limits are on blocks, not on parts: armor by the hundred, working blocks by the handful.
-        var armor = pick.Block.GetType().Name.Contains("Armor", StringComparison.OrdinalIgnoreCase);
-        var step = sign * PlanLimits.Step(armor, Down(VkShift), Down(VkControl));
-        var before = PlanStore.CountOf(pick.Key);
-        var after = PlanLimits.Apply(before, step, armor);
-        PlanStore.Add(pick.Key, pick.Name, pick.Block, after - before);
-        var capped = sign > 0 && after - before < step ? $", limit {PlanLimits.Max(armor)}" : "";
-        PlanStore.Say($"Build Planner: {pick.Name} {(after >= before ? "+" : "")}{after - before} (now {after}{capped})");
+    /// <summary>Ctrl+N: remembers the block selected in the G menu (if any) and opens the planner window.</summary>
+    private static void OpenWithSelected(object terminalViewModel)
+    {
+        PickSelected(terminalViewModel);
+        Screens.PlannerScreen.Open();
     }
 
     /// <summary>

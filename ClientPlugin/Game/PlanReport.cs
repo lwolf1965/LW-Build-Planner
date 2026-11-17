@@ -143,21 +143,16 @@ internal sealed class PlanReport
             catch (Exception) { return 0; }
         }
 
-        var usable = stores.Where(s => !double.IsNaN(s.MassMax) && !double.IsNaN(s.MassNow)).ToList();
-        if (usable.Count == 0 || report.Need.Count == 0) return null;
+        double PerPiece(string id) => report.Items.TryGetValue(id, out var item) ? MassPer(item) : 0;
 
-        var calc = usable.Sum(s => s.MassCalc);
-        var now = usable.Sum(s => s.MassNow);
-        var scale = calc > 0 && now > 0 ? now / calc : 1.0;
-        var free = usable.Sum(s => Math.Max(0, s.MassMax - s.MassNow));
+        // The maths (scale, free capacity, thresholds) is pure code in Policy/CargoLimit.cs, covered by the tests.
+        var masses = stores.Select(s => new StoreMass { Max = s.MassMax, Now = s.MassNow, Calc = s.MassCalc }).ToList();
+        var check = CargoLimit.Check(masses, report.Need, incoming, PerPiece, report.NameOf);
+        if (check == null) return null;
 
-        double Mass(string id) => report.Items.TryGetValue(id, out var item) ? MassPer(item) * scale : 0;
-        foreach (var pair in incoming) free -= Mass(pair.Key) * pair.Value;
-        free = Math.Max(0, free);
-
-        PluginLog.Info($"Cargo space: {usable.Count} storage inventories, free {free:N0}, stored {now:N0} (items add up to {calc:N0}, scale {scale:0.###}); "
-                       + string.Join(", ", report.Need.Take(6).Select(n => $"{report.NameOf(n.Key)} {n.Value:N0} x {Mass(n.Key):0.##}")));
-        return PlanAlerts.Space(report.Need, Mass, free, report.NameOf);
+        PluginLog.Info($"Cargo space: {check.Storages} storage inventories, free {check.Free:N0}, stored {check.Stored:N0} (items add up to {check.Calc:N0}, scale {check.Scale:0.###}); "
+                       + string.Join(", ", report.Need.Take(6).Select(n => $"{report.NameOf(n.Key)} {n.Value:N0} x {PerPiece(n.Key) * check.Scale:0.##}")));
+        return check.Alert;
     }
 
     /// <summary>

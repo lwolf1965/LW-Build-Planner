@@ -34,6 +34,22 @@ internal static class PlanStore
     private static readonly object Gate = new();
     private static readonly Dictionary<object, PlannedEntry> Entries = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>The block that was selected in the G menu when Ctrl+N was pressed; the window offers it with Add buttons. Count is unused.</summary>
+    public static volatile PlannedEntry Offered;
+
+    /// <summary>Adds blocks of the offered block, kept within the line's limit. Returns how many were really added.</summary>
+    public static int AddOffered(PlannedEntry offered, int count)
+    {
+        lock (Gate)
+        {
+            var before = Entries.TryGetValue(offered.Key, out var entry) ? entry.Count : 0;
+            var after = PlanLimits.Apply(before, count, offered.Armor);
+            if (after != before)
+                Entries[offered.Key] = new PlannedEntry { Key = offered.Key, Name = offered.Name, Block = offered.Block, Count = after, Armor = offered.Armor };
+            return after - before;
+        }
+    }
+
     /// <summary>Messages for the player; shown by the UI thread as HUD notifications and always logged.</summary>
     public static readonly ConcurrentQueue<string> Messages = new();
 

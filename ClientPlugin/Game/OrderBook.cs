@@ -8,25 +8,50 @@ using Keen.Game2.Simulation.WorldObjects.Items;
 
 namespace ClientPlugin.Game;
 
-/// <summary>One line of the order list on the planner screen.</summary>
+/// <summary>Where one ordered part stands.</summary>
+internal enum OrderState
+{
+    /// <summary>Everything ordered of it has arrived.</summary>
+    Done,
+    /// <summary>A crafter is working on it.</summary>
+    Crafting,
+    /// <summary>Queued in a crafter that is not crafting yet: it waits for sub-parts from smaller crafters or for earlier jobs.</summary>
+    Queued,
+    /// <summary>No crafter of the right kind is free yet.</summary>
+    WaitingForCrafter,
+    /// <summary>No arrivals for a minute and no crafter working on it.</summary>
+    NoProgress,
+    /// <summary>The player stopped the waiting parts (or the crafter is gone): the rest will not be made.</summary>
+    Stopped,
+}
+
+/// <summary>One line of the order list on the planner screen, in the order the parts were ordered (oldest first).</summary>
 internal sealed class OrderLine
 {
+    public int Position;
     public string Item;
+    /// <summary>Everything ordered of this part in the batch.</summary>
+    public long Ordered;
+    /// <summary>Parts that arrived so far.</summary>
+    public long Done;
     /// <summary>Parts not queued yet (no free crafter).</summary>
     public long Waiting;
     /// <summary>Parts queued in crafters, not finished yet.</summary>
     public long Queued;
-    /// <summary>Crafter names working on it.</summary>
-    public string Crafters;
-    /// <summary>Why it waits, or "".</summary>
+    public OrderState State;
+    /// <summary>Per crafter: how many parts it still has and whether it is crafting.</summary>
+    public string Detail;
+    /// <summary>Extra reason (busy crafters, no progress ...), or "".</summary>
     public string Note;
 }
 
 /// <summary>
 /// The running orders. Game thread only (called from PlannerEngine); the screen reads the Lines snapshot.
 /// Every few seconds: parts that arrived in stock are taken off the order lines, and parts still waiting are queued
-/// on the crafters that are free (not crafting) right now, spread evenly. Nothing is queued on a busy crafter: when
-/// all crafters of a kind are busy the parts wait, and the player is told that more crafters would help.
+/// on the crafters that are free (not crafting) right now, in batches (Dispatch.MaxBatchCrafts crafts per crafter), part
+/// by part in the order they were ordered. Every free crafter gets its own batch, so more crafters finish a big build
+/// sooner; a crafter that becomes free gets the next batch of the oldest part still waiting. Nothing is queued on a busy
+/// crafter: when all crafters of a kind are busy the parts wait, and the player is told that more crafters would help.
 /// A line is done when its parts have arrived, not when the crafter pauses: an Assembler waiting for sub-parts from
 /// a Smelter is not crafting but far from done (seen in game 2026-11-16). A line with no arrivals and no crafter
 /// working for a minute is marked "no progress" and stays until the player clears it.
@@ -51,6 +76,15 @@ internal static class OrderBook
     private static CubeGridComponent grid;
     private static double lastTick;
     private static bool wasActive;
+    private const string NoProgressNote = "no progress (ore or sub-parts missing?)";
+    /// <summary>Crafters (ids) that were crafting at the last tick.</summary>
+    private static HashSet<int> crafting = new();
+    /// <summary>Crafters (ids) that hold a counted batch but do not craft: since when (seconds). Used to get a crafter back after a lost batch.</summary>
+    private static readonly Dictionary<int, double> IdleSince = new();
+    /// <summary>A crafter that holds a counted batch but has not crafted for this long gets a new batch anyway.</summary>
+    public const double IdleReclaimSeconds = 30;
+    private static double startedAt = -1;
+    private static double finishedAt = -1;
 
     /// <summary>Snapshot for the screen; replaced as a whole, never changed in place.</summary>
     public static volatile IReadOnlyList<OrderLine> Lines = Array.Empty<OrderLine>();
@@ -61,6 +95,17 @@ internal static class OrderBook
     /// <summary>The grid the running orders belong to; a new order goes to the same grid while orders run.</summary>
     public static CubeGridComponent Grid => Ledger.Active ? grid : null;
 
+    /// <summary>"running 1:12" or "finished in 0:41" for the batch on the screen; "" when there is none. Safe to call from the UI thread.</summary>
+    public static string ElapsedLabel()
+    {
+        var start = startedAt;
+        if (start < 0) return "";
+        var end = finishedAt;
+        var span = TimeSpan.FromSeconds(Math.Max(0, (end >= 0 ? end : Clock.Elapsed.TotalSeconds) - start));
+        var text = span.TotalHours >= 1 ? span.ToString(@"h\:mm\:ss") : span.ToString(@"m\:ss");
+        return (end >= 0 ? "finished in " : "running ") + text;
+    }
+
     public static bool TickDue => Ledger.Active && Clock.Elapsed.TotalSeconds - lastTick >= TickSeconds;
 
     /// <summary>Takes a checked plan as an order and queues what can be queued now.</summary>
@@ -69,9 +114,10 @@ internal static class OrderBook
         grid = report.Grid.Grid;
         unlinked = report.Unlinked;
         foreach (var pair in report.Items) Items[pair.Key] = pair.Value;
+        var now = Clock.Elapsed.TotalSeconds;
+        if (!Ledger.Active) { startedAt = now; finishedAt = -1; } // a new batch starts
         Ledger.Commit(report.Need);
         Told.Clear();
-        var now = Clock.Elapsed.TotalSeconds;
         foreach (var item in report.Need.Keys) LastProgress[item] = now;
         Process(report.Grid, StockScan.Run(context).Values);
     }
@@ -108,7 +154,24 @@ internal static class OrderBook
         LastProgress.Clear();
         Told.Clear();
         wasActive = false;
+        startedAt = finishedAt = -1;
+        crafting = new HashSet<int>();
+        IdleSince.Clear();
         Publish();
+    }
+
+    /// <summary>
+    /// A new world was loaded: drop everything that points into the old one (orders, crafter and item lookups, the grid),
+    /// so nothing of it stays in memory and no order of the old world is tracked in the new one.
+    /// </summary>
+    public static void ForgetWorld()
+    {
+        Reset();
+        Items.Clear();
+        CrafterIds.Clear();
+        CrafterNames.Clear();
+        grid = null;
+        unlinked = new HashSet<object>();
     }
 
     private static int IdOf(Maker maker)
@@ -123,7 +186,14 @@ internal static class OrderBook
     {
         var makers = scan.Makers.Where(m => !unlinked.Contains(m.Entity)).ToList();
         var byId = makers.ToDictionary(IdOf, m => m);
+        crafting = byId.Where(p => CrafterApi.IsCrafting(p.Value.Converter)).Select(p => p.Key).ToHashSet();
         var now = Clock.Elapsed.TotalSeconds;
+        var idle = byId.Keys.Where(id => !crafting.Contains(id)).ToList();
+        foreach (var id in byId.Keys)
+        {
+            if (crafting.Contains(id) || Ledger.QueuedOfCrafter(id) <= 0) IdleSince.Remove(id);
+            else if (!IdleSince.ContainsKey(id)) IdleSince[id] = now;
+        }
 
         // 1. Arrivals: any rise of an ordered part's stock (all storage and crafter outputs on the player's grids, so a
         //    move by LW Cargo Manager changes nothing) is taken off the order lines. Parts taken out are ignored.
@@ -138,7 +208,7 @@ internal static class OrderBook
             {
                 if (stock > before)
                 {
-                    Ledger.Arrived(itemId, stock - before);
+                    Ledger.Arrived(itemId, stock - before, idle);
                     LastProgress[itemId] = now;
                     Told.Remove("stuck:" + itemId);
                 }
@@ -156,20 +226,25 @@ internal static class OrderBook
             var working = Ledger.QueuedLines.Where(q => q.Item == itemId).Any(q => byId.TryGetValue(q.Crafter, out var m) && CrafterApi.IsCrafting(m.Converter));
             if (working) LastProgress[itemId] = now;
             if (now - (LastProgress.TryGetValue(itemId, out var last) ? last : now) < StuckSeconds) continue;
-            Notes[itemId] = "no progress (ore or sub-parts missing?)";
+            Notes[itemId] = NoProgressNote;
             if (Told.Add("stuck:" + itemId))
                 PlanStore.Say($"Build Planner: {NameOf(itemId)} is not progressing. Check ore and sub-parts, or clear the orders.");
         }
 
-        // 3. Waiting parts go to the crafters that are free now.
-        foreach (var itemId in Ledger.Waiting.Keys.ToList())
+        // 3. Waiting parts go to the free crafters in batches, oldest order first (see Policy/Dispatch.cs).
+        var free = byId.Keys.Where(id => Dispatch.IsFree(crafting.Contains(id), Ledger.QueuedOfCrafter(id),
+            IdleSince.TryGetValue(id, out var since) ? now - since : 0, IdleReclaimSeconds)).ToList();
+        var wants = new List<DispatchWant>();
+        var recipes = new Dictionary<(int Crafter, string Item), object>();
+        var ableOf = new Dictionary<string, (int Count, string Machine)>();
+        foreach (var itemId in Ledger.WaitingOrder().ToList()) // oldest order first
         {
             if (!Items.TryGetValue(itemId, out var item)) { Ledger.DropWaiting(itemId); continue; }
-            var able = new List<(Maker Maker, object Recipe)>();
-            foreach (var maker in makers)
+            var able = new List<(int Id, Maker Maker, object Recipe)>();
+            foreach (var pair in byId)
             {
-                var recipe = CrafterApi.CanProduce(maker.Converter, item);
-                if (recipe != null) able.Add((maker, recipe));
+                var recipe = CrafterApi.CanProduce(pair.Value.Converter, item);
+                if (recipe != null) { able.Add((pair.Key, pair.Value, recipe)); recipes[(pair.Key, itemId)] = recipe; }
             }
             if (able.Count == 0)
             {
@@ -177,43 +252,46 @@ internal static class OrderBook
                 PlanStore.Say($"Build Planner: no crafter here can make {NameOf(itemId)}, dropped");
                 continue;
             }
-
-            var machine = able[0].Maker.Machine;
-            var free = able.Where(a => !CrafterApi.IsCrafting(a.Maker.Converter)).ToList();
-            var waiting = Ledger.Waiting[itemId];
-            if (free.Count == 0)
+            ableOf[itemId] = (able.Count, able[0].Maker.Machine);
+            wants.Add(new DispatchWant
             {
-                Notes[itemId] = $"all {able.Count} {machine}(s) busy";
-                LastProgress[itemId] = now;
-                if (Told.Add("busy:" + machine))
-                    PlanStore.Say($"Build Planner: all {able.Count} {machine}(s) are busy, {waiting} {NameOf(itemId)} waiting. More {machine}s would finish sooner.");
-                continue;
-            }
-            Told.Remove("busy:" + machine);
+                Item = itemId,
+                Waiting = Ledger.Waiting[itemId],
+                PerCraft = Math.Max(1, CrafterApi.Outputs(able[0].Recipe).Where(o => o.Item == item).Sum(o => o.Amount)),
+                Able = able.Select(a => a.Id).ToList(),
+            });
+        }
 
-            var perCraft = Math.Max(1, CrafterApi.Outputs(free[0].Recipe).Where(o => o.Item == item).Sum(o => o.Amount));
-            var crafts = (int)Math.Min(int.MaxValue, Math.Ceiling(waiting / perCraft));
-            var split = OrderPlan.Split(crafts, free.Count, int.MaxValue);
-            for (var i = 0; i < free.Count; i++)
+        var jobs = Dispatch.Plan(wants, free, Dispatch.MaxBatchCrafts);
+        foreach (var job in jobs)
+        {
+            var item = Items[job.Item];
+            var maker = byId[job.Crafter];
+            var want = wants.First(w => w.Item == job.Item);
+            var ok = OrderJob.DryRun || CrafterApi.Enqueue(maker.Converter, recipes[(job.Crafter, job.Item)], job.Crafts);
+            PluginLog.Info($"{(OrderJob.DryRun ? "DRY RUN: would queue" : "Queued")} batch of {job.Crafts} x {NameOf(job.Item)} in '{maker.Name}' ({(ok ? "ok" : "refused")}), {Ledger.Waiting.GetValueOrDefault(job.Item)} waiting");
+            if (!ok) { Notes[job.Item] = $"'{maker.Name}' refused the order (queue full?)"; continue; }
+            Ledger.MarkQueued(job.Crafter, job.Item, (long)Math.Ceiling(job.Crafts * want.PerCraft));
+            IdleSince.Remove(job.Crafter);
+            LastProgress[job.Item] = now;
+            Told.Remove("busy:" + ableOf[job.Item].Machine);
+            if (!LastStock.ContainsKey(job.Item))
             {
-                if (split[i] <= 0) continue;
-                var (maker, recipe) = free[i];
-                var ok = OrderJob.DryRun || CrafterApi.Enqueue(maker.Converter, recipe, split[i]);
-                PluginLog.Info($"{(OrderJob.DryRun ? "DRY RUN: would queue" : "Queued")} {split[i]} x {NameOf(itemId)} in '{maker.Name}' ({(ok ? "ok" : "refused")})");
-                if (ok)
-                {
-                    Ledger.MarkQueued(IdOf(maker), itemId, (long)Math.Ceiling(split[i] * perCraft));
-                    LastProgress[itemId] = now;
-                    if (!LastStock.ContainsKey(itemId))
-                    {
-                        long stock = 0;
-                        foreach (var store in allGrids.SelectMany(g => g.Stores))
-                            if (store.Items.TryGetValue(item, out var amount)) stock += (long)Math.Floor(amount);
-                        LastStock[itemId] = stock;
-                    }
-                }
-                else Notes[itemId] = $"'{maker.Name}' refused the order (queue full?)";
+                long stock = 0;
+                foreach (var store in allGrids.SelectMany(g => g.Stores))
+                    if (store.Items.TryGetValue(item, out var amount)) stock += (long)Math.Floor(amount);
+                LastStock[job.Item] = stock;
             }
+        }
+
+        // Parts that got no crafter this pass: say why (once), and keep them from looking stuck.
+        foreach (var want in wants.Where(w => Ledger.Waiting.ContainsKey(w.Item) && jobs.All(j => j.Item != w.Item)))
+        {
+            var (count, machine) = ableOf[want.Item];
+            Notes[want.Item] = free.Any(id => want.Able.Contains(id)) ? "" : $"all {count} {machine}(s) busy";
+            LastProgress[want.Item] = now;
+            if (!free.Any(id => want.Able.Contains(id)) && Told.Add("busy:" + machine))
+                PlanStore.Say($"Build Planner: all {count} {machine}(s) are busy, {Ledger.Waiting[want.Item]} {NameOf(want.Item)} waiting. More {machine}s would finish sooner.");
         }
 
         if (wasActive && !Ledger.Active) PlanStore.SayDone("Build Planner: all ordered parts are done");
@@ -225,17 +303,38 @@ internal static class OrderBook
 
     private static void Publish()
     {
+        if (!Ledger.Active && startedAt >= 0 && finishedAt < 0) finishedAt = Clock.Elapsed.TotalSeconds;
         var lines = new List<OrderLine>();
         var queuedLines = Ledger.QueuedLines.ToList();
-        foreach (var itemId in Ledger.Waiting.Keys.Concat(queuedLines.Select(q => q.Item)).Distinct())
+        foreach (var itemId in Ledger.Sequence)
+        {
+            var waiting = Ledger.Waiting.TryGetValue(itemId, out var w) ? w : 0;
+            var queued = Ledger.QueuedOf(itemId);
+            var mine = queuedLines.Where(q => q.Item == itemId).OrderBy(q => q.Crafter).ToList();
+            Notes.TryGetValue(itemId, out var note);
+            note ??= "";
+
+            OrderState state;
+            if (waiting == 0 && queued == 0) state = Ledger.Done(itemId) >= Ledger.Ordered(itemId) ? OrderState.Done : OrderState.Stopped;
+            else if (note == NoProgressNote) state = OrderState.NoProgress;
+            else if (queued > 0) state = mine.Any(q => crafting.Contains(q.Crafter)) ? OrderState.Crafting : OrderState.Queued;
+            else state = OrderState.WaitingForCrafter;
+
             lines.Add(new OrderLine
             {
+                Position = lines.Count + 1,
                 Item = NameOf(itemId),
-                Waiting = Ledger.Waiting.TryGetValue(itemId, out var waiting) ? waiting : 0,
-                Queued = Ledger.QueuedOf(itemId),
-                Crafters = string.Join(", ", queuedLines.Where(q => q.Item == itemId).Select(q => CrafterNames.TryGetValue(q.Crafter, out var n) ? n : "?").Distinct()),
-                Note = Notes.TryGetValue(itemId, out var note) ? note : "",
+                Ordered = Ledger.Ordered(itemId),
+                Done = Ledger.Done(itemId),
+                Waiting = waiting,
+                Queued = queued,
+                State = state,
+                Detail = string.Join("; ", mine.Select(q =>
+                    $"{(CrafterNames.TryGetValue(q.Crafter, out var name) ? name : "?")}: {q.Amount:N0} left, "
+                    + (crafting.Contains(q.Crafter) ? "crafting" : "waiting (sub-parts or earlier jobs)"))),
+                Note = note == NoProgressNote ? "" : note,
             });
-        Lines = lines.OrderBy(l => l.Item, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        Lines = lines;
     }
 }
