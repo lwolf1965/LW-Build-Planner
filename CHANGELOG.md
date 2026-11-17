@@ -28,6 +28,7 @@ First test build.
 - A new world session resets the build list, the check and the orders (nothing of the old world stays in memory).
 - Window buttons do not fail on systems without the Windows key API (keys are Windows only; the window works everywhere).
 - The window is made of boxes with short explanations and keeps its scroll position while it updates.
+- README and user manual also in Russian (README.ru.md, Docs/UserManual.ru.md); manual has install and quick start sections.
 - Compact window: smaller fonts and buttons, shorter box hints and tooltips, so it fits 1080p screens; the parts box shows only a short "nothing missing" line when everything is in storage.
 - Smaller [-] [+] [X] buttons in the build list (the game's button style had a minimum size that made them big); "All orders finished (N made)" instead of "All 1 parts finished".
 

@@ -1,9 +1,20 @@
 # LW Build Planner: user manual
 
+English | [Русский](UserManual.ru.md)
+
 Version 0.1.0.1 (test build). Single player.
 
 ## What it is for
 You want to build something, for example ten hydrogen thrusters. The planner tells you which parts that needs, what is already in your storage, and orders the rest from your crafters.
+
+## Install
+Install [Pulsar](https://github.com/SpaceGT/Pulsar) (the plugin loader for Space Engineers 2). Once LW Build Planner is listed in the PluginHub, open the plugin list in Pulsar, enable **LW Build Planner** and restart the game. Nothing has to be set up; the plugin works in every world you load.
+
+## Quick start
+1. In the G menu select a block and press **+**. Do this for every block you want to build.
+2. Press **Ctrl+N**: the planner window shows the parts the list needs and what is missing.
+3. Fix what the window lists as a problem (ore, crafter, conveyor, cargo space), then press **Order missing**.
+4. The Orders box shows the progress. When everything has arrived you get a green notification, the blocks leave the list, and you can build.
 
 ## 1. Pick blocks
 1. Open the G menu.
@@ -40,7 +51,7 @@ The window scrolls (mouse wheel or scroll bar) and is made of boxes, each with a
 
 What you carry yourself is not counted.
 
-**Problems**: reasons an order is blocked, see section 4. "Order all" stays grey while there is a problem; make the list smaller with `[-]` and it opens again.
+**Problems for 'Order all'**: reasons an order is blocked, see section 4. "Order all" stays grey while there is a problem; make the list smaller with `[-]` and it opens again. Warnings that do not block an order are shown in a **Notes** box instead.
 
 **Orders**: the progress of what you ordered. At the top: how many parts are finished, how many pieces are made of the total, a progress bar and a clock (running / finished in). Then one line per part, **oldest order first**: its number, a progress bar, "made / ordered" and a status:
 
@@ -70,7 +81,7 @@ How the storage limiter works:
 | Check | counts storage, ore and conveyor links again |
 | Order all | makes every part in "need", whatever you already have |
 | Order missing | makes only the "missing" column; tells you when nothing is missing |
-| Empty list | takes every line out of the build list; running orders go on |
+| Empty list | takes every line out of the build list; running orders go on, stopped ones are cleared |
 
 The Orders box has its own button. While orders run it is **Stop orders**: parts not yet given to a crafter are dropped and the box is emptied; crafters finish what is already in their queues. Finished orders clear themselves (and take their blocks off the list); if lines are left that can no longer run, the button says **Remove orders** and clears the box.
 
@@ -110,6 +121,7 @@ The window, the notifications and the problem texts follow the game's language: 
 - The list stays while orders run, so it is still there after a restart. When all orders are done the ordered blocks leave it by themselves; **Empty list** clears it at any time.
 - Orders are not saved. After loading, the crafters finish what is already in their queues. Wait until they are done before you press **Order missing**: the planner does not see those old queues, so it would order those parts again.
 - Orders go to the crafters of one grid: the one with the most crafters.
+- When all orders are done the ordered blocks always leave the list. To build the same again, pick the blocks again (a "repeat" option may come later).
 - `+` and Ctrl+N cannot be changed yet. `+` in the G menu needs Windows; Ctrl+N works everywhere (it uses the game's own input).
 
 ## 6. With LW Cargo Manager
