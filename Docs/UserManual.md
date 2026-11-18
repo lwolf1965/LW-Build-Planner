@@ -121,5 +121,6 @@ The window, the notifications and the problem texts follow the game's language: 
 - The list stays while orders run, so it is still there after a restart. When all orders are done the ordered blocks leave it by themselves; **Empty list** clears it at any time.
 - Orders are not saved. After loading, the crafters finish what is already in their queues. Wait until they are done before you press **Order missing**: the planner does not see those old queues, so it would order those parts again.
 - Orders go to the crafters of one grid: the one with the most crafters.
+- The planner leaves parts you queued by hand alone, with one exception from the game itself: if an idle crafter still holds a part you queued by hand (for example one stuck for lack of ore), and the planner queues the same part there, the game adds the planner's batch to your entry. Nothing is lost; the crafter makes both together.
 - When all orders are done the ordered blocks always leave the list. To build the same again, pick the blocks again (a "repeat" option may come later).
 - `+` and Ctrl+N cannot be changed yet. `+` in the G menu needs Windows; Ctrl+N works everywhere (it uses the game's own input).

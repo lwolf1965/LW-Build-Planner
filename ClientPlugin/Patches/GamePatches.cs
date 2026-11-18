@@ -30,6 +30,7 @@ internal static class SessionUpdatePatch
     {
         PlannerEngine.OnUpdate(__instance, __0);
         Hotkeys.OnSessionUpdate(__instance); // Ctrl+N outside the G menu (client session only)
+        HudNotify.PostDrain(); // messages show on time also without an open terminal (cheap when none wait)
     }
 }
 

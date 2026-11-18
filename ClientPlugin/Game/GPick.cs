@@ -53,8 +53,8 @@ internal static class GPick
             var viewModelType = terminalViewModel.GetType();
             if (uiFieldOwner != viewModelType) { uiFieldOwner = viewModelType; uiField = Reflect.Field(viewModelType, "_inGameUI"); }
             var ui = Reflect.Get(uiField, terminalViewModel);
-            for (var shown = 0; shown < 3 && PlanStore.Messages.TryDequeue(out var message); shown++)
-                HudNotify.Show(ui, message);
+            HudNotify.Remember(ui); // also used while no terminal is open (HudNotify.PostDrain)
+            HudNotify.Drain(ui);
 
             if (keysUnavailable || !GameHasFocus()) return;
             // N is read every frame, so holding Ctrl+N opens the window once.

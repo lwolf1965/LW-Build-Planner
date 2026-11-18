@@ -37,6 +37,7 @@ internal static class PlannerEngine
     private static void ForgetWorld(WorldSessionComponent world)
     {
         PlanSave.Detach(); // nothing of the old world is written into the new world's file
+        HudNotify.Forget(); // the old world's HUD is gone; the new one is remembered when a terminal opens
         OrderBook.ForgetWorld();
         GameLanguage.Refresh(); // messages of this world in the game's language
         PlanStore.Clear();

@@ -17,7 +17,10 @@ public class Plugin : IPlugin
 #pragma warning disable CS0649
     private static Func<string, string, string> GetConfigPath;
 #pragma warning restore CS0649
-    public string DataDir { get; private set; } = GetConfigPath(Name, null);
+    // Pulsar's data folder for this plugin, asked for only when something uses it: asking creates the folder, and this
+    // version stores nothing there (hub review of PR #41, 2026-11-19). The settings of the next version use it.
+    private string dataDir;
+    public string DataDir => dataDir ??= GetConfigPath(Name, null);
 
     public Plugin()
     {

@@ -4,6 +4,7 @@ Version scheme: STAGE.FEATURE.FIX.BUILD (0.1 = game alpha).
 
 ## 0.1.0.1 (not released)
 First test build.
+- Hub review fixes (PR #41): HUD notifications show on time also while no terminal is open (they waited for the next G menu); the game's text lookups no longer take a lock until the first planner message; Pulsar's data folder is no longer created at start; SECURITY.md, CONTRIBUTING.md and the pull request template describe what the plugin really does (the per-world list file, the keys it reads); the built DLL is no longer kept in the repository (builds go to GitHub releases); the manual explains the one case where the game merges a planner batch into a part you queued by hand.
 - Pick blocks in the G menu with `+` (Shift and Ctrl for bigger steps); limits per list line: armor 1000, other blocks 50.
 - Planner window (Ctrl+N anywhere in a world, or the plugin's config button in Pulsar): build list, parts table, problems, orders. In the G menu only `+` and Ctrl+N are keys (Ctrl+B is the game's blueprint key); in the window every change is a button (no `-`, Home or End keys).
 - Order all / Order missing; parts are queued only on free crafters and spread evenly; all crafter kinds (Smelter, Refinery, Assembler, Fabricator, Gearforge).
