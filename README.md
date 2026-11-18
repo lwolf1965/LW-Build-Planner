@@ -8,6 +8,7 @@ Status: **0.1.0.1, first test build**, submitted to PluginHub-SE2 (waiting for r
 
 ## What it does
 - **Pick** a block variant and size in the G menu and press `+` to add it to a build list (Shift / Ctrl for bigger steps).
+- **Whole blueprints**: in the terminal's Blueprints tab select a blueprint and press `+`: all its blocks (armor included) go into the list as one blueprint project. The game's Blueprint Details screen gets a Build Planner box: the ore the whole blueprint costs, whether your stock is enough (else the missing ore) and an **Add to Build Planner** button.
 - **Planner window**: build list, parts (need, in storage, on order, missing), problems, running orders.
 - **Order all** or **Order missing**: the parts are queued in batches on the crafters that are free, oldest part first; a crafter that finishes gets the next batch. Build as many crafters as you can: more crafters make a big build faster. The game's crafters request the sub-parts from smaller crafters themselves.
 - **Checks** before ordering: ore deficit, missing crafter kind, no conveyor link, no storage, not enough cargo space (blocks the order; warning above 80 % of the free capacity).
@@ -26,8 +27,10 @@ Manual: [Docs/UserManual.md](Docs/UserManual.md) ([русский](Docs/UserManu
 ## Keys
 | Key | Action |
 |---|---|
-| `+` (also numpad `+`) | add the selected block; Shift and Ctrl for bigger steps |
+| `+` (also numpad `+`) | add the selected block; Shift, Ctrl and Alt for bigger steps |
 | Ctrl+N | open the planner window (anywhere in a world) |
+
+Both keys, the step sizes and the order options can be changed in the settings (Pulsar's config button, or **Settings** in the planner window).
 
 Everything else (remove, clear, order) is a button in the window, so no stray key press takes blocks off the list or starts crafters.
 

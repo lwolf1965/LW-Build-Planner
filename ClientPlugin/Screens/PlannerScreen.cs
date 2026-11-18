@@ -49,6 +49,9 @@ internal class PlannerScreen : ScreenView
     private DateTime waitingSince = DateTime.MinValue;
     private DateTime viewBeforeClick;
     private string lastDrawn;
+    /// <summary>Settings "Confirm clearing": the button ("clear" or "stop") waiting for its second click, and since when.</summary>
+    private string armed;
+    private DateTime armedAt;
 
     /// <summary>Opens the window (UI thread). Does nothing when it is already open.</summary>
     public static void Open()
@@ -86,8 +89,22 @@ internal class PlannerScreen : ScreenView
             HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
         };
         close.Click += (_, _) => Dispose();
+        // Settings: the window closes and the settings dialog opens (Ctrl+N brings the window back with the new settings).
+        var settings = new Button
+        {
+            Content = Tr.T("btn.settings"), Height = 30, MinHeight = 0, Padding = new Thickness(10, 0, 10, 0), FontSize = 14,
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(settings, SmallTip(Tr.T("tip.settings")));
+        settings.Click += (_, _) =>
+        {
+            PluginLog.Info("Window: 'Settings' clicked");
+            Dispose();
+            Dispatcher.UIThread.Post(() => Plugin.Instance?.OpenConfigDialog(), DispatcherPriority.Background);
+        };
         var titleBar = new Grid();
         titleBar.Children.Add(title);
+        titleBar.Children.Add(settings);
         titleBar.Children.Add(close);
 
         content = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2, Margin = new Thickness(12, 8, 12, 8) };
@@ -108,6 +125,7 @@ internal class PlannerScreen : ScreenView
         buttons.Children.Add(orderMissing);
         clearList = MakeButton(Tr.T("btn.clearList"), Tr.T("tip.clearList"), () =>
         {
+            if (!Confirmed("clear")) return;
             PlanStore.Clear();
             PlannerEngine.Enqueue(c =>
             {
@@ -202,6 +220,24 @@ internal class PlannerScreen : ScreenView
         PlannerEngine.Enqueue(c => PlanService.Check(c, mode));
     }
 
+    /// <summary>
+    /// Settings "Confirm clearing" (off by default): the first click only arms the button (its text asks for a second
+    /// click), a second click within 4 s does it. With the setting off every click counts at once.
+    /// </summary>
+    private bool Confirmed(string which)
+    {
+        if (!PlannerSettings.Current.ConfirmClear) return true;
+        if (armed == which && DateTime.Now - armedAt <= TimeSpan.FromSeconds(4))
+        {
+            armed = null;
+            return true;
+        }
+        armed = which;
+        armedAt = DateTime.Now;
+        PluginLog.Info($"Window: '{which}' waits for a second click");
+        return false;
+    }
+
     private Button MakeButton(string text, string tip, Action run)
     {
         // MinHeight = 0: the game's button style has a minimum height of its own, so a smaller Height would be ignored.
@@ -235,15 +271,26 @@ internal class PlannerScreen : ScreenView
             var plan = PlanStore.Snapshot().OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
             var view = PlanService.LastView;
             var orders = OrderBook.Lines;
-            // Order all / Order missing stay clickable (Order() ignores a click while the previous one is answered):
-            // every click checks storage again first, and a problem or running orders are answered with a notification.
-            orderAll.IsEnabled = plan.Count > 0;
-            orderMissing.IsEnabled = plan.Count > 0;
+            // Order all / Order missing are grey while the last check says they are blocked (short of ore, no space, ...):
+            // "Order missing" stays open when storage covers what "Order all" lacks. Check (or any list change) checks
+            // again, e.g. after mining. Every click still checks storage first (Order() ignores a click while the
+            // previous one is answered), and running orders are answered with a notification.
+            var allOk = view == null || view.CanBuild;
+            orderAll.IsEnabled = plan.Count > 0 && allOk;
+            orderMissing.IsEnabled = plan.Count > 0 && (allOk || view.MissingOk);
             clearList.IsEnabled = plan.Count > 0;
             check.IsEnabled = plan.Count > 0; // nothing to check in an empty list
+            if (armed != null && DateTime.Now - armedAt > TimeSpan.FromSeconds(4))
+            {
+                armed = null; // the second click did not come: back to normal
+                lastDrawn = null;
+            }
+            var clearText = armed == "clear" ? Tr.T("btn.confirm") : Tr.T("btn.clearList");
+            if (!Equals(clearList.Content, clearText)) clearList.Content = clearText;
 
             // Rebuild only when something changed, so hovering and scrolling are not disturbed every second.
-            var stamp = string.Join("|", plan.Select(p => p.Name + p.Count)) + "#" + view?.Time.Ticks + "#"
+            var project = PlanStore.ProjectName;
+            var stamp = string.Join("|", plan.Select(p => p.Name + p.Count + (p.Project ? "p" : ""))) + "#" + project + "#" + armed + "#" + view?.Time.Ticks + "#"
                         + string.Join("|", orders.Select(o => $"{o.Item}{o.Done}/{o.Ordered}/{o.Waiting}/{o.Queued}/{o.State}{o.Detail}{o.Note}"));
             if (stamp == lastDrawn) return;
             lastDrawn = stamp;
@@ -253,9 +300,47 @@ internal class PlannerScreen : ScreenView
             elapsedText = null;
 
             // 1. Build list
-            var list = Card(Tr.T("card.list"), Tr.T("hint.list"));
+            var list = Card(Tr.T("card.list"), Tr.T("hint.list", PlanLimits.Max(true), PlanLimits.Max(false)));
             if (plan.Count == 0) Line(list, Tr.T("empty"), Dim);
-            foreach (var entry in plan) list.Children.Add(ListRow(entry));
+            foreach (var entry in plan.Where(p => !p.Project)) list.Children.Add(ListRow(entry));
+            // The blueprint project (one at a time): a heading with its name, size and an X for the whole blueprint,
+            // then its lines (no line limit). Hand-picked lines stay above it.
+            var projectLines = plan.Where(p => p.Project).ToList();
+            if (projectLines.Count > 0)
+            {
+                var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 2) };
+                head.Children.Add(new TextBlock
+                {
+                    Text = Tr.T("list.project", project ?? "?", N(projectLines.Sum(p => (long)p.Count)), projectLines.Count),
+                    FontSize = 16, FontWeight = FontWeight.Bold, Foreground = Head, VerticalAlignment = VerticalAlignment.Center,
+                });
+                var dropArmed = armed == "project";
+                var drop = new Button
+                {
+                    Content = dropArmed ? Tr.T("btn.confirm") : "X", Height = 24, MinWidth = 0, MinHeight = 0, FontSize = 13,
+                    Width = dropArmed ? double.NaN : 26, Padding = dropArmed ? new Thickness(8, 0, 8, 0) : new Thickness(0),
+                    HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+                };
+                ToolTip.SetTip(drop, SmallTip(Tr.T("tip.removeProject")));
+                drop.Click += (_, _) =>
+                {
+                    try
+                    {
+                        PluginLog.Info("Window: 'remove blueprint' clicked");
+                        if (Confirmed("project"))
+                        {
+                            PlanStore.RemoveProject();
+                            PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None));
+                        }
+                        lastDrawn = null;
+                        Dispatcher.UIThread.Post(Redraw, DispatcherPriority.Background); // rebuilt after its click, not inside it
+                    }
+                    catch (Exception e) { PluginLog.Error("Remove blueprint failed: " + e); }
+                };
+                head.Children.Add(drop);
+                list.Children.Add(head);
+                foreach (var entry in projectLines) list.Children.Add(ListRow(entry));
+            }
 
             // 2. Parts
             var parts = Card(Tr.T("card.parts") + (view == null ? "" : $"   ({Tr.T("parts.checked", view.Time.ToString("HH:mm:ss"))}{(string.IsNullOrEmpty(view.Grid) ? "" : ", " + view.Grid)})"),
@@ -278,6 +363,7 @@ internal class PlannerScreen : ScreenView
                     view.CanBuild ? null : Tr.T("hint.problems"));
                 foreach (var alert in view.Alerts)
                     Line(problems, alert.Text, alert.Level == AlertLevel.Error ? Bad : Warn);
+                if (view.MissingNote != null) Line(problems, view.MissingNote, view.MissingOk ? Good : Bad);
             }
 
             // 4. Orders: progress per part, oldest order first
@@ -288,8 +374,12 @@ internal class PlannerScreen : ScreenView
                 // The orders' own button sits in their box, so it cannot be taken for one of the list's buttons.
                 // Running orders: "Stop orders". All of them finished (or stopped): the same place says "Remove orders".
                 var over = orders.All(o => o.State == OrderState.Done || o.State == OrderState.Stopped);
-                var stop = MakeButton(Tr.T(over ? "btn.removeOrders" : "btn.stopOrders"), Tr.T(over ? "tip.removeOrders" : "tip.stopOrders"),
-                    () => PlannerEngine.Enqueue(_ => OrderBook.Reset()));
+                var stopText = over ? Tr.T("btn.removeOrders") : armed == "stop" ? Tr.T("btn.confirm") : Tr.T("btn.stopOrders");
+                var stop = MakeButton(stopText, Tr.T(over ? "tip.removeOrders" : "tip.stopOrders"), () =>
+                {
+                    if (!over && !Confirmed("stop")) return; // removing finished orders needs no confirmation
+                    PlannerEngine.Enqueue(_ => OrderBook.Reset());
+                });
                 stop.HorizontalAlignment = HorizontalAlignment.Right;
                 stop.Height = 28;
                 stop.FontSize = 14;
@@ -416,8 +506,8 @@ internal class PlannerScreen : ScreenView
                 if (sign == 0) PlanStore.Remove(entry.Key);
                 else
                 {
-                    var (shift, ctrl) = GPick.Modifiers();
-                    PlanStore.Change(entry.Key, sign * PlanLimits.Step(entry.Armor, shift, ctrl));
+                    var (shift, ctrl, alt) = GPick.Modifiers();
+                    PlanStore.Change(entry.Key, sign * PlanLimits.Step(entry.Armor, shift, ctrl, alt));
                 }
                 PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None)); // the checks follow the new list
                 lastDrawn = null;

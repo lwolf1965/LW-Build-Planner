@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using ClientPlugin.Policy;
 using Keen.Game2.Simulation.WorldObjects.CubeBlocks;
+using Keen.VRage.Library.Definitions;
 
 namespace ClientPlugin.Game;
 
@@ -19,6 +20,21 @@ internal sealed class PlannedEntry
     public int Count;
     /// <summary>Armor goes by the hundred (limit 1000 per line), working blocks by the handful (limit 50).</summary>
     public bool Armor;
+    /// <summary>The line belongs to the blueprint project (key: ProjectKey; no line limit).</summary>
+    public bool Project;
+
+    public PlannedEntry With(int count) => new() { Key = Key, Name = Name, Block = Block, Count = count, Armor = Armor, Project = Project };
+}
+
+/// <summary>
+/// Key of a blueprint project line: the block's composite definition, wrapped so a project line never merges with a
+/// hand-picked line of the same block (the two stay separate lines).
+/// </summary>
+internal sealed class ProjectKey
+{
+    public readonly Definition Composite;
+    public ProjectKey(Definition composite) => Composite = composite;
+    public override string ToString() => "project " + Composite;
 }
 
 /// <summary>
@@ -33,6 +49,54 @@ internal static class PlanStore
 {
     private static readonly object Gate = new();
     private static readonly Dictionary<object, PlannedEntry> Entries = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Name of the blueprint project in the list (one at a time), null when there is none.</summary>
+    public static string ProjectName { get; private set; }
+
+    /// <summary>
+    /// A blueprint was read: its lines replace the project lines in the list (only one blueprint at a time); hand-picked
+    /// lines stay. Returns the name of the project it replaced, or null.
+    /// </summary>
+    public static string SetProject(string name, IReadOnlyCollection<PlannedEntry> lines)
+    {
+        string previous;
+        lock (Gate)
+        {
+            previous = ProjectName;
+            foreach (var key in Entries.Where(p => p.Value.Project).Select(p => p.Key).ToList())
+            {
+                Entries.Remove(key);
+                Ordered.Remove(key);
+            }
+            foreach (var line in lines) Entries[line.Key] = line;
+            ProjectName = lines.Count > 0 ? name : null;
+        }
+        PlanSave.Save();
+        return previous;
+    }
+
+    /// <summary>Takes the blueprint project and all its lines out of the list.</summary>
+    public static void RemoveProject()
+    {
+        lock (Gate)
+        {
+            foreach (var key in Entries.Where(p => p.Value.Project).Select(p => p.Key).ToList()) Entries.Remove(key);
+            ProjectName = null;
+        }
+        PlanSave.Save();
+    }
+
+    /// <summary>The project's name read back from the world's file (PlanSave).</summary>
+    public static void RestoreProject(string name)
+    {
+        lock (Gate) ProjectName = Entries.Values.Any(e => e.Project) ? name : null;
+    }
+
+    /// <summary>Inside the lock: a project with no lines left is over.</summary>
+    private static void ForgetEmptyProject()
+    {
+        if (ProjectName != null && !Entries.Values.Any(e => e.Project)) ProjectName = null;
+    }
 
     /// <summary>The block that was selected in the G menu when Ctrl+N was pressed; the window offers it with Add buttons. Count is unused.</summary>
     public static volatile PlannedEntry Offered;
@@ -89,9 +153,11 @@ internal static class PlanStore
         lock (Gate)
         {
             if (!Entries.TryGetValue(variantKey, out var entry)) return 0;
-            now = PlanLimits.Apply(entry.Count, delta, entry.Armor);
+            // Project lines come from the blueprint: no line limit (the blueprint may need 2000 armor blocks).
+            now = entry.Project ? Math.Max(0, entry.Count + delta) : PlanLimits.Apply(entry.Count, delta, entry.Armor);
             if (now == 0) Entries.Remove(variantKey);
-            else Entries[variantKey] = new PlannedEntry { Key = variantKey, Name = entry.Name, Block = entry.Block, Count = now, Armor = entry.Armor };
+            else Entries[variantKey] = entry.With(now);
+            ForgetEmptyProject();
         }
         PlanSave.Save();
         return now;
@@ -100,7 +166,11 @@ internal static class PlanStore
     /// <summary>Takes a whole line out of the list.</summary>
     public static void Remove(object variantKey)
     {
-        lock (Gate) Entries.Remove(variantKey);
+        lock (Gate)
+        {
+            Entries.Remove(variantKey);
+            ForgetEmptyProject();
+        }
         PlanSave.Save();
     }
 
@@ -116,6 +186,7 @@ internal static class PlanStore
         {
             Entries.Clear();
             Ordered.Clear();
+            ProjectName = null;
         }
         PlanSave.Save();
     }
@@ -153,9 +224,10 @@ internal static class PlanStore
                 if (now == entry.Count) continue;
                 taken += entry.Count - now;
                 if (now == 0) Entries.Remove(key);
-                else Entries[key] = new PlannedEntry { Key = key, Name = entry.Name, Block = entry.Block, Count = now, Armor = entry.Armor };
+                else Entries[key] = entry.With(now);
             }
             Ordered.Clear();
+            ForgetEmptyProject();
         }
         if (taken > 0) PlanSave.Save();
         return taken;
@@ -168,9 +240,26 @@ internal static class PlanStore
 
     public static void Say(string message)
     {
+        // The same message again within a few seconds (a key held or pressed quickly, 2026-11-18 stream: 11 x "select
+        // a block first" in 8 s) is shown and logged once.
+        lock (SayGate)
+        {
+            var now = DateTime.Now;
+            if (message == lastSaid && now - lastSaidAt < TimeSpan.FromSeconds(4))
+            {
+                lastSaidAt = now;
+                return;
+            }
+            lastSaid = message;
+            lastSaidAt = now;
+        }
         PluginLog.Info("HUD: " + message);
         Messages.Enqueue(message);
     }
+
+    private static readonly object SayGate = new();
+    private static string lastSaid;
+    private static DateTime lastSaidAt;
 
     /// <summary>First character of a queued message that asks for the game's "success" look and high priority (see HudNotify).</summary>
     public const char ImportantMark = '\u0001';

@@ -160,14 +160,19 @@ public sealed class OrderLedger
 /// <summary>How many blocks one key press adds and how many a list line may hold.</summary>
 public static class PlanLimits
 {
-    public const int ArmorMax = 1000;
-    public const int OtherMax = 50;
+    /// <summary>
+    /// Armor is placed by the hundred; working blocks (thrusters, tanks ...) by the handful. The sizes come from the
+    /// settings (defaults: armor 1 / Shift 10 / Ctrl 100 / Alt 500, other blocks 1 / 5 / 10 / 25). Alt beats Ctrl beats Shift.
+    /// </summary>
+    public static int Step(bool armor, bool shift, bool ctrl, bool alt = false)
+    {
+        var s = PlannerSettings.Current;
+        return armor ? (alt ? s.ArmorStepAlt : ctrl ? s.ArmorStepCtrl : shift ? s.ArmorStepShift : s.ArmorStep)
+                     : (alt ? s.StepAlt : ctrl ? s.StepCtrl : shift ? s.StepShift : s.Step);
+    }
 
-    /// <summary>Armor is placed by the hundred; working blocks (thrusters, tanks ...) by the handful.</summary>
-    public static int Step(bool armor, bool shift, bool ctrl)
-        => armor ? (ctrl ? 100 : shift ? 10 : 1) : (ctrl ? 10 : shift ? 5 : 1);
-
-    public static int Max(bool armor) => armor ? ArmorMax : OtherMax;
+    /// <summary>Most blocks per list line (settings; defaults armor 1000, other blocks 50).</summary>
+    public static int Max(bool armor) => armor ? PlannerSettings.Current.ArmorMaxPerLine : PlannerSettings.Current.MaxPerLine;
 
     /// <summary>The count after adding (or removing) delta, kept between 0 and the limit.</summary>
     public static int Apply(int current, int delta, bool armor) => Math.Max(0, Math.Min(Max(armor), current + delta));

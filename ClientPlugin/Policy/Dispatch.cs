@@ -33,8 +33,11 @@ public sealed class DispatchJob
 /// </summary>
 public static class Dispatch
 {
-    /// <summary>Most crafts one crafter gets in one batch. Small batches keep every crafter busy until the part is finished.</summary>
-    public const int MaxBatchCrafts = 10;
+    /// <summary>
+    /// Most crafts one crafter gets in one batch (settings: batch size, default 10). Small batches keep every crafter busy
+    /// until the part is finished.
+    /// </summary>
+    public static int MaxBatchCrafts => PlannerSettings.Current.BatchCrafts;
 
     /// <summary>
     /// May a crafter get a new batch? Not while it crafts. Not while the planner still counts a batch in it (it may wait for

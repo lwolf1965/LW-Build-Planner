@@ -2,6 +2,20 @@
 
 Version scheme: STAGE.FEATURE.FIX.BUILD (0.1 = game alpha).
 
+## Unreleased (branch `blueprint`)
+- Whole blueprints: in the terminal's Blueprints tab the add key reads the selected blueprint (every block of every grid, armor included, counted per block kind) and puts it into the build list as the blueprint project — a heading with name, blocks and kinds, its own lines without a line limit, an X to remove it. One blueprint at a time (a new one replaces it; hand-picked lines stay). Same-name blocks get their size ("2.5 m"). Saved with the world (list file version 2; version 1 files are still read).
+- Build Planner box in the game's Blueprint Details screen (in the free left column; the game's own buttons are not moved): blocks and kinds, the ore the whole blueprint costs from scratch (one ore per line), whether it can be built from current stock with Order missing (else the missing ore or the first problem), the ore Order all would lack, and an Add to Build Planner button (a second click confirms replacing another blueprint). Reads only until the button is pressed.
+- The blueprint box checks stock for the blueprint together with the hand-picked blocks already in the list (as the list will be after Add).
+- The settings dialog (title, sections, labels, tips) is in the game's language, like the planner window.
+- Less noise: "all crafters busy" is said once per order; the log writes order progress at most every 30 s per part and one line per picked block.
+- The same HUD message is shown once when it repeats within 4 s (e.g. the add key pressed quickly with nothing selected).
+- Planner window: when Order all is blocked, the Problems box also says whether Order missing would work (green) or is blocked too (red).
+- Settings dialog (Pulsar's config button, or Settings in the planner window), saved in Config.xml in the plugin's data folder; built with the settings system of the client plugin template (CometWorks/client2-plugin-template, MIT):
+  - Orders: keep the list when all orders are done (order the same build again), confirm Empty list / Stop orders with a second click, batch size, cargo warning %, "no progress" time.
+  - Keys: add block (default +) and open planner (default Ctrl+N) can be changed.
+  - Steps: Shift, Ctrl and the new Alt step sizes and the most blocks per line, for working blocks and for armor.
+- The planner's logic reads the settings as plain values (Policy/PlannerSettings.cs, kept in range, tested); the defaults are the old behaviour.
+
 ## 0.1.0.1 (not released)
 First test build.
 - Pick blocks in the G menu with `+` (Shift and Ctrl for bigger steps); limits per list line: armor 1000, other blocks 50.

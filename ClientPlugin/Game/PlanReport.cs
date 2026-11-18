@@ -15,6 +15,8 @@ internal sealed class PlanReport
 {
     public GridStock Grid;
     public TreeResult Tree;
+    /// <summary>The recipes read for this report (items the grid's crafters can make, down to raw materials).</summary>
+    public IReadOnlyDictionary<string, Recipe> Recipes = new Dictionary<string, Recipe>();
     public List<PlanAlert> Alerts = new();
     public readonly Dictionary<string, ItemDefinition> Items = new();
 
@@ -98,6 +100,7 @@ internal sealed class PlanReport
 
         var incoming = ledger.IncomingAll();
         var recipes = ReadRecipes(grid, wanted.Keys.Concat(incoming.Keys.Where(report.Items.ContainsKey).Select(id => report.Items[id])), report);
+        report.Recipes = recipes;
         var wantedIds = wanted.Where(w => w.Value > 0).ToDictionary(w => Id(w.Key), w => w.Value);
 
         // Earlier orders still running: the ore and sub-parts they will use are taken off the stock first.

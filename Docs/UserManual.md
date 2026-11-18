@@ -19,12 +19,12 @@ Install [Pulsar](https://github.com/SpaceGT/Pulsar) (the plugin loader for Space
 ## 1. Pick blocks
 1. Open the G menu.
 2. Click the block group, then the variant in the row on the right, then the size (the small squares).
-3. Press **+** (the `+`/`=` key or numpad `+`) to add it to the build list. Shift and Ctrl give bigger steps:
+3. Press **+** (the `+`/`=` key or numpad `+`) to add it to the build list. Shift, Ctrl and Alt give bigger steps (defaults below, change them in the settings):
 
-| Block | + alone | Shift + | Ctrl + | Most per line |
-|---|---|---|---|---|
-| Armor | 1 | 10 | 100 | 1000 |
-| Everything else | 1 | 5 | 10 | 50 |
+| Block | + alone | Shift + | Ctrl + | Alt + | Most per line |
+|---|---|---|---|---|---|
+| Armor | 1 | 10 | 100 | 500 | 1000 |
+| Everything else | 1 | 5 | 10 | 25 | 50 |
 
 A notification confirms each press, for example "Build: Mk3 200 +1 (now 3)".
 
@@ -34,12 +34,32 @@ In the G menu only `+` and Ctrl+N are keys. Removing, clearing and ordering are 
 
 Note: the "Components" list in the G menu itself shows the cost of the first variant of a group for every variant. The planner uses the real cost of the variant and size you selected.
 
+### A whole blueprint
+1. Open the terminal (G) and go to the **Blueprints** tab.
+2. Click a blueprint.
+3. Press **+** (the add key). The planner reads every block of the blueprint, armor included, and puts it into the build list as one **blueprint project**: a heading with its name, the number of blocks and kinds, and one line per block kind. A notification confirms it, for example "Build: blueprint Dart EX-2 added: 361 blocks, 50 kinds".
+
+**Before you decide: the Build Planner box.** Open a blueprint's details (the game's **Blueprint Details** screen). The planner shows a box in the free left column (the blueprint's screenshots move down below it; the game's own buttons stay as they are):
+- the number of blocks and kinds,
+- the **ore the whole blueprint costs** from scratch (for example "Iron 120,000 · Silicon 3,400 · Nickel 2,100"),
+- whether it **can be built from your current stock** (green), or the **missing ore** (red), or the first problem (no crafter, nothing makes a part here). This is the **Order missing** view: parts already in storage are used;
+- when only **Order all** (every part made new) would run short, the ore it lacks, in orange,
+- an **Add to Build Planner** button. If another blueprint is already in the list, the first click asks ("Again: replace …"), the second replaces it. If this blueprint is already in the list, the button updates it.
+
+The stock answers are for the list as it will be after **Add**: the blueprint together with the blocks you picked by hand (the box says how many). The ore cost is for the blueprint alone.
+
+The box only reads: nothing is placed, ordered or changed until you press its button. Stock means storage and crafters on your grids, minus what running orders still need.
+
+The planner window says the same for the whole list: when **Order all** is blocked, its Problems box adds whether **Order missing** would still work (green) or is blocked too (red).
+
+Only one blueprint at a time: a second one replaces the first (blocks you picked by hand stay). Blueprint lines have no line limit. The **X** next to the heading takes the whole blueprint out of the list; **Empty list** clears everything. The blueprint is saved with the world like the rest of the list. Two blocks with the same name in different sizes get the size after the name ("Hydrogen Thruster 2.5 m").
+
 ## 2. The planner window
-Press Ctrl+N anywhere in a world (or use the plugin's config button in Pulsar).
+Press Ctrl+N anywhere in a world. The **Settings** button at the top left of the window opens the settings (section 5).
 
 The window scrolls (mouse wheel or scroll bar) and is made of boxes, each with a short explanation of what it shows.
 
-**Build list**: what you picked. Every line has `[-]` count `[+]` `[X]` buttons: Shift and Ctrl give bigger steps, a line that reaches 0 leaves the list, `[X]` removes it at once.
+**Build list**: what you picked. Every line has `[-]` count `[+]` `[X]` buttons: Shift, Ctrl and Alt give bigger steps, a line that reaches 0 leaves the list, `[X]` removes it at once.
 
 **Parts**
 | Column | Meaning |
@@ -51,7 +71,7 @@ The window scrolls (mouse wheel or scroll bar) and is made of boxes, each with a
 
 What you carry yourself is not counted.
 
-**Problems for 'Order all'**: reasons an order is blocked, see section 4. "Order all" stays grey while there is a problem; make the list smaller with `[-]` and it opens again. Warnings that do not block an order are shown in a **Notes** box instead.
+**Problems for 'Order all'**: reasons an order is blocked, see section 4. "Order all" stays grey while there is a problem; make the list smaller with `[-]` and it opens again. The box also says whether "Order missing" would still work (storage covers the rest); if it is blocked too, "Order missing" is grey as well. After mining or moving cargo, press **Check** to check again. Warnings that do not block an order are shown in a **Notes** box instead.
 
 **Orders**: the progress of what you ordered. At the top: how many parts are finished, how many pieces are made of the total, a progress bar and a clock (running / finished in). Then one line per part, **oldest order first**: its number, a progress bar, "made / ordered" and a status:
 
@@ -110,10 +130,25 @@ When everything has arrived you get "Build: all ordered parts are done, the bloc
 | X is not progressing | no parts arrived for a minute and no crafter is working on it | check ore and sub-parts; **Stop orders** (in the Orders box) if it stays |
 | Not enough cargo space | the new parts weigh more than the free capacity of the storage | add or empty containers, or order fewer blocks |
 
+## 5. Settings
+Open them with the plugin's config button in Pulsar or with **Settings** in the planner window (the window closes; Ctrl+N brings it back). They are saved when you close the dialog and apply at once.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Keep list when done | off | when all orders are done the ordered blocks stay in the list, so the same build can be ordered again |
+| Confirm clearing | off | **Empty list** and **Stop orders** need a second click (the button asks for it for 4 seconds) |
+| Batch size | 10 | crafts a free crafter gets at once |
+| Cargo warning % | 80 | warn when the new parts need more than this share of the free cargo space |
+| No progress after (s) | 60 | when a part shows "no progress" |
+| Add block | + | the key that adds the selected block in the G menu; Shift, Ctrl and Alt with it give the steps below |
+| Open planner | Ctrl+N | the key that opens the planner window |
+| Steps: blocks | Shift 5, Ctrl 10, Alt 25, most per line 50 | step sizes and line limit for working blocks |
+| Steps: armor | Shift 10, Ctrl 100, Alt 500, most per line 1000 | the same for armor |
+
 ## Languages
 The window, the notifications and the problem texts follow the game's language: English, Czech, German, Spanish, French, Italian, Polish, Portuguese (Brazil), Russian, Slovak, Turkish, Ukrainian and Simplified Chinese. Block, part and crafter names come from the game itself. Change the language in the game's settings; the planner follows at once (the window shows it the next time it opens). A language the game adds later shows the planner in English.
 
-## 5. Limits of this version
+## 6. Limits of this version
 - Progress counts parts arriving in storage. A mod that makes crafters output more than the recipe (for example a "4x faster" crafter mod) makes lines finish too early.
 - You cannot cancel parts that are already inside a crafter from the planner; remove them in the crafter's own screen.
 - The build list is saved for each world (in `AppData\LwBuildPlanner\Worlds` inside the game's data folder) and comes back when you load that world again. A new world keeps its list from its first save on.
@@ -122,4 +157,4 @@ The window, the notifications and the problem texts follow the game's language: 
 - Orders are not saved. After loading, the crafters finish what is already in their queues. Wait until they are done before you press **Order missing**: the planner does not see those old queues, so it would order those parts again.
 - Orders go to the crafters of one grid: the one with the most crafters.
 - When all orders are done the ordered blocks always leave the list. To build the same again, pick the blocks again (a "repeat" option may come later).
-- `+` and Ctrl+N cannot be changed yet. `+` in the G menu needs Windows; Ctrl+N works everywhere (it uses the game's own input).
+- The add key in the G menu needs Windows; the open key works everywhere (it uses the game's own input). Both can be changed in the settings.

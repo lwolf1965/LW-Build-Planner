@@ -56,6 +56,13 @@ public static partial class Tr
         catch (FormatException) { return text; }
     }
 
+    /// <summary>
+    /// A settings dialog text (label, description, section, title) in the language in use. The settings attributes in
+    /// Config.cs keep their English text; its translation is the row "set:" + that text, so a text with no row stays English.
+    /// </summary>
+    public static string Setting(string english)
+        => string.IsNullOrEmpty(english) || !Table.ContainsKey("set:" + english) ? english : T("set:" + english);
+
     /// <summary>All text keys (for the tests).</summary>
     public static IEnumerable<string> Keys => Table.Keys;
 

@@ -68,6 +68,8 @@ nunit-*.xml
 # Working material that stays out of the repository
 # Probe outputs and game logs copied into Docs/ for analysis (the findings live in the notes, not in git)
 /Docs/probe*.txt
+# Probe code (temporary, only on a working branch, never committed)
+/ClientPlugin/**/*Probe.cs
 /Docs/*.log
 *.log
 # Packaged builds (a release is attached on GitHub, not committed)

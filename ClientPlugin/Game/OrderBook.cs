@@ -68,7 +68,10 @@ internal static class OrderBook
     private static readonly Dictionary<int, string> CrafterNames = new();
     private static readonly Dictionary<string, long> LastStock = new();
     private static readonly Dictionary<string, double> LastProgress = new();
-    public const double StuckSeconds = 60;
+    /// <summary>When "Order progress" was last logged per part: at most every 30 s, plus the last arrival.</summary>
+    private static readonly Dictionary<string, double> ProgressLogged = new();
+    /// <summary>No arrivals and no crafter working on a part for this long: "no progress" (settings, default 60 s).</summary>
+    public static double StuckSeconds => PlannerSettings.Current.NoProgressSeconds;
     private static readonly Dictionary<string, string> Notes = new();
     private static readonly HashSet<string> Told = new();
     private static readonly Stopwatch Clock = Stopwatch.StartNew();
@@ -153,6 +156,7 @@ internal static class OrderBook
         Notes.Clear();
         LastStock.Clear();
         LastProgress.Clear();
+        ProgressLogged.Clear();
         Told.Clear();
         wasActive = false;
         startedAt = finishedAt = -1;
@@ -215,7 +219,12 @@ internal static class OrderBook
                     LastProgress[itemId] = now;
                     Told.Remove("stuck:" + itemId);
                 }
-                PluginLog.Info($"Order progress: {NameOf(itemId)} stock {before} -> {stock}, {Ledger.QueuedOf(itemId)} still in crafters");
+                var left = Ledger.QueuedOf(itemId);
+                if (left == 0 || !ProgressLogged.TryGetValue(itemId, out var logged) || now - logged >= 30)
+                {
+                    ProgressLogged[itemId] = now;
+                    PluginLog.Info($"Order progress: {NameOf(itemId)} stock {before} -> {stock}, {left} still in crafters");
+                }
             }
             LastStock[itemId] = stock;
         }
@@ -277,7 +286,8 @@ internal static class OrderBook
             Ledger.MarkQueued(job.Crafter, job.Item, (long)Math.Ceiling(job.Crafts * want.PerCraft));
             IdleSince.Remove(job.Crafter);
             LastProgress[job.Item] = now;
-            Told.Remove("busy:" + ableOf[job.Item].Machine);
+            // "All N x crafter are busy" is said once per order (Told is cleared by the next order click), not after
+            // every batch: on long orders it came every ~35 s (stream 2026-11-18). The window's line note stays live.
             if (!LastStock.ContainsKey(job.Item))
             {
                 long stock = 0;
@@ -302,8 +312,10 @@ internal static class OrderBook
             // All orders are done, so the build is ready: the ordered blocks leave the build list and the orders are
             // removed, so a finished build is not ordered twice by mistake. Stopped orders never get here (Reset clears
             // wasActive), and their list stays.
-            var taken = PlanStore.TakeOrdered();
-            PlanStore.SayDone(Tr.T("hud.done"));
+            // Settings: "Keep list when done" leaves the list as it is, so the same build can be ordered again.
+            var keep = PlannerSettings.Current.KeepListWhenDone;
+            var taken = keep ? 0 : PlanStore.TakeOrdered();
+            PlanStore.SayDone(Tr.T(keep ? "hud.doneKept" : "hud.done"));
             PluginLog.Info($"All orders done: {taken} block(s) taken off the build list, orders removed.");
             Reset();
             return true;

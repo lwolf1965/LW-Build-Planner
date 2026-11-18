@@ -179,6 +179,15 @@ Check(usedTree.Consumed["SteelTube"] == 1 && usedTree.Consumed["OreIron"] == 10,
 
 Check(PlanLimits.Step(true, false, true) == 100 && PlanLimits.Step(false, false, true) == 10 && PlanLimits.Step(false, true, false) == 5, "armor by the hundred, other blocks by the handful");
 Check(PlanLimits.Apply(995, 100, true) == 1000 && PlanLimits.Apply(45, 10, false) == 50 && PlanLimits.Apply(3, -10, false) == 0, "counts stay between 0 and the limit");
+// ---- settings (PlannerSettings): steps, limits, batch size and cargo warning come from the settings dialog
+var defaults = PlannerSettings.Current;
+PlannerSettings.Current = new PlannerSettings { StepShift = 3, StepCtrl = 7, StepAlt = 20, ArmorStepAlt = 250, MaxPerLine = 30, BatchCrafts = 4, CargoWarnPercent = 60 }.Checked();
+Check(PlanLimits.Step(false, true, false) == 3 && PlanLimits.Step(false, false, true) == 7 && PlanLimits.Step(false, true, true, true) == 20 && PlanLimits.Step(true, false, false, true) == 250, "settings: step sizes for Shift, Ctrl and Alt (Alt beats Ctrl beats Shift)");
+Check(PlanLimits.Apply(25, 10, false) == 30 && Dispatch.MaxBatchCrafts == 4 && Math.Abs(PlanAlerts.TightShare - 0.6) < 1e-9, "settings: line limit, batch size and cargo warning");
+var wild = new PlannerSettings { StepShift = -5, MaxPerLine = 0, BatchCrafts = 0, CargoWarnPercent = 500, NoProgressSeconds = 1 }.Checked();
+Check(wild.StepShift == 1 && wild.MaxPerLine == 1 && wild.BatchCrafts == 1 && wild.CargoWarnPercent == 100 && wild.NoProgressSeconds == 10, "settings: a broken config file is kept in range");
+PlannerSettings.Current = defaults;
+Check(PlanLimits.Step(true, false, true) == 100 && PlanLimits.Max(true) == 1000 && Dispatch.MaxBatchCrafts == 10 && Math.Abs(PlanAlerts.TightShare - 0.8) < 1e-9, "settings: defaults are the planner's old behaviour");
 
 var spaceNeed = new Dictionary<string, long> { ["Plate"] = 100, ["Tube"] = 50 };
 double SpaceMass(string id) => id == "Plate" ? 5 : id == "Tube" ? 2 : 0;
@@ -343,6 +352,74 @@ Check(PlanFile.Read("").Count == 0 && PlanFile.Read(null).Count == 0, "list file
 Check(PlanFile.FileName("3f2504e0-4f89-11d3-9a0c-0305e82c3301") == "3f2504e0-4f89-11d3-9a0c-0305e82c3301.txt", "list file: the world's save id is the file name");
 Check(PlanFile.FileName("../../evil\\path:name") is string safeName && safeName.EndsWith(".txt") && safeName.Substring(0, safeName.Length - 4).IndexOfAny(new[] { '/', '\\', ':', '.' }) < 0, "list file: a save id can never leave the plugin's folder");
 Check(PlanFile.FileName(null) == null && PlanFile.FileName("") == null && PlanFile.FileName("00000000-0000-0000-0000-000000000000") == null, "list file: a world without a save id gets no file");
+
+// ---- blueprint project (list file v2, line names)
+var projectFile = PlanFile.Write(new[]
+{
+    new PlanLine { Key = "k-1", Block = "b-1", Count = 3, Name = "Hand Picked" },
+    new PlanLine { Key = "k-2", Block = "b-2", Count = 361, Name = "Heavy Armor Cube", Project = true },
+}, "Dart EX-2");
+var projectBack = PlanFile.Read(projectFile, out var projectName);
+Check(projectName == "Dart EX-2" && projectBack.Count == 2 && !projectBack[0].Project && projectBack[1].Project && projectBack[1].Count == 361, "list file: the blueprint project and its lines are kept");
+Check(PlanFile.Read(PlanFile.HeaderV1 + "\nk\tb\t5\tOld", out var oldProject).Count == 1 && oldProject == null, "list file: a version 1 file (no project) is still read");
+Check(PlanFile.Read(PlanFile.Write(new[] { new PlanLine { Key = "k", Block = "b", Count = 1, Name = "x" } }), out var noProject).Count == 1 && noProject == null, "list file: a list without a project has no project row");
+Check(BlueprintNames.SizeOf(@"Vanilla\Blocks\Thrusters\Hydrogen\250\HydrogenThruster250_ServerComposition.def") == "2.5 m"
+      && BlueprintNames.SizeOf(@"Vanilla\Blocks\GatlingTurret\600\GatlingTurret600_ServerComposition.def") == "6 m"
+      && BlueprintNames.SizeOf(@"Vanilla\System\Grid\Grid_ServerComposite.def") == null, "blueprint: block size from the definition path");
+var bpLines = BlueprintNames.Lines(new[]
+{
+    new BlueprintKind<string> { Key = "t50", Name = "Hydrogen Thruster", Path = @"Blocks\Hydrogen\50\a.def", Count = 4 },
+    new BlueprintKind<string> { Key = "t250", Name = "Hydrogen Thruster", Path = @"Blocks\Hydrogen\250\b.def", Count = 13 },
+    new BlueprintKind<string> { Key = "cube", Name = "Heavy Armor Cube", Path = @"Blocks\Armor\250\c.def", Count = 10 },
+    new BlueprintKind<string> { Key = "cube", Name = "Heavy Armor Cube", Path = @"Blocks\Armor\250\c.def", Count = 2 },
+});
+Check(bpLines.Count == 3 && bpLines[0].Name == "Heavy Armor Cube" && bpLines[0].Count == 12, "blueprint: one line per block kind, counts added up, unique names stay plain");
+Check(bpLines[1].Name == "Hydrogen Thruster 0.5 m" && bpLines[2].Name == "Hydrogen Thruster 2.5 m" && bpLines[2].Count == 13, "blueprint: same-name blocks get their size");
+
+// ---- every text the plugin's code asks for exists (probe over the sources, so a typo in a key shows here, not in game)
+string SourceRoot()
+{
+    foreach (var start in new[] { System.IO.Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        for (var dir = new System.IO.DirectoryInfo(start); dir != null; dir = dir.Parent)
+            if (System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "ClientPlugin", "Config.cs"))) return System.IO.Path.Combine(dir.FullName, "ClientPlugin");
+    return null;
+}
+var sourceRoot = SourceRoot();
+Check(sourceRoot != null, "sources: ClientPlugin folder found for the text probes");
+if (sourceRoot != null)
+{
+    var sources = System.IO.Directory.GetFiles(sourceRoot, "*.cs", System.IO.SearchOption.AllDirectories)
+        .Where(f => !f.Contains(System.IO.Path.DirectorySeparatorChar + "obj" + System.IO.Path.DirectorySeparatorChar)
+                    && !f.Contains(System.IO.Path.DirectorySeparatorChar + "bin" + System.IO.Path.DirectorySeparatorChar)
+                    && !f.EndsWith("TrTable.cs") && !f.EndsWith("Probe.cs"))
+        .ToDictionary(f => f, System.IO.File.ReadAllText);
+    var keyUse = new System.Text.RegularExpressions.Regex(@"Tr\.(?:T|In\([^,()]+,)\s*\(?\s*""([A-Za-z0-9_.]+)""");
+    var usedKeys = sources.SelectMany(f => keyUse.Matches(f.Value).Select(m => (Key: m.Groups[1].Value, File: System.IO.Path.GetFileName(f.Key)))).ToList();
+    var unknownKeys = usedKeys.Where(u => Tr.Row(u.Key) == null).Select(u => u.Key + " in " + u.File).Distinct().ToList();
+    Check(usedKeys.Count > 50 && unknownKeys.Count == 0, $"sources: all {usedKeys.Select(u => u.Key).Distinct().Count()} text keys used in the code exist" + (unknownKeys.Count > 0 ? " (unknown: " + string.Join(", ", unknownKeys.Take(5)) + ")" : ""));
+
+    // Settings dialog: every label, description, section and the title of Config.cs, and every Tr.Setting("...") text,
+    // has its "set:" row, and the English cell is that exact text.
+    var config = sources.First(f => f.Key.EndsWith(System.IO.Path.DirectorySeparatorChar + "Config.cs")).Value;
+    var settingTexts = new System.Text.RegularExpressions.Regex(@"(?:label|description): ""([^""]+)""|\[Separator\(""([^""]+)""\)\]|Title = ""([^""]+)""")
+        .Matches(config).Select(m => m.Groups.Cast<System.Text.RegularExpressions.Group>().Skip(1).First(g => g.Success).Value)
+        .Concat(sources.Values.SelectMany(t => new System.Text.RegularExpressions.Regex(@"Tr\.Setting\(""([^""]+)""\)").Matches(t).Select(m => m.Groups[1].Value)))
+        .Distinct().ToList();
+    var untranslated = settingTexts.Where(t => Tr.Row("set:" + t) == null || Tr.Row("set:" + t)[0] != t).ToList();
+    Check(settingTexts.Count >= 30 && untranslated.Count == 0, $"settings: all {settingTexts.Count} dialog texts have their 13 languages" + (untranslated.Count > 0 ? " (missing: " + string.Join(" | ", untranslated.Take(3)) + ")" : ""));
+}
+Tr.Use("ru-RU");
+Check(Tr.Setting("Batch size") == "Размер партии" && Tr.Setting("Orders") == "Заказы", "settings: labels and sections follow the game's language (Russian)");
+Check(Tr.Setting("A text with no row") == "A text with no row" && Tr.Setting(null) == null && Tr.Setting("") == "", "settings: a text without a row stays as it is (English)");
+Tr.Use("en-US");
+Check(Tr.Setting("Batch size") == "Batch size", "settings: back to English");
+
+// Texts that name a window button use that button's own text in every language (so the player finds the button).
+bool Names(string key, string button) => Tr.Languages.Select((_, i) => i).All(i => Tr.Row(key)[i].Contains(Tr.Row(button)[i]));
+Check(Names("problems.missingOk", "btn.orderMissing") && Names("problems.missingNone", "btn.orderMissing") && Names("problems.missingBlocked", "btn.orderMissing"), "texts: the 'Order missing' notes name the real button in every language");
+Check(Names("bp.allShort", "btn.orderAll"), "texts: the blueprint box's 'Order all' line names the real button in every language");
+var confirmTip = "set:Empty list and Stop orders need a second click.";
+Check(Tr.Row(confirmTip) != null && Names(confirmTip, "btn.clearList") && Names(confirmTip, "btn.stopOrders"), "settings: the 'Confirm clearing' tip names the real buttons in every language");
 
 Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
 return fails == 0 ? 0 : 1;

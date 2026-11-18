@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ClientPlugin.Policy;
+using Keen.Game2.Simulation.WorldObjects.CubeGrids;
 using Keen.Game2.Simulation.WorldObjects.Items;
 
 namespace ClientPlugin.Game;
@@ -26,7 +27,28 @@ internal sealed class PlanView
     public bool CanBuild;
     public List<PartLine> Parts = new();
     public List<PlanAlert> Alerts = new();
+    /// <summary>When "Order all" is blocked: what "Order missing" would do (null: not checked).</summary>
+    public string MissingNote;
+    public bool MissingOk;
     public DateTime Time = DateTime.Now;
+}
+
+/// <summary>A blueprint checked for the Blueprint Details screen (PlanService.Preview).</summary>
+internal sealed class BlueprintCheck
+{
+    public bool CanBuild;
+    /// <summary>Hand-picked blocks in the list that were checked together with the blueprint (0: none).</summary>
+    public int KeptBlocks;
+    /// <summary>Ore the whole blueprint needs from scratch, biggest first.</summary>
+    public List<(string Name, long Amount)> OreCost = new();
+    /// <summary>Raw materials the crafters here cannot make (e.g. ingots with no refinery), for the whole blueprint.</summary>
+    public List<(string Name, long Amount)> NotMade = new();
+    /// <summary>Ore that storage and running orders do not cover, biggest first.</summary>
+    public List<(string Name, long Amount)> MissingOre = new();
+    /// <summary>Ore missing for "Order all" (every part made new), biggest first.</summary>
+    public List<(string Name, long Amount)> AllShort = new();
+    public List<string> Errors = new();
+    public List<string> Warnings = new();
 }
 
 /// <summary>What a check should do after counting.</summary>
@@ -49,21 +71,103 @@ internal static class PlanService
     /// <summary>Last check, for the screen. Null before the first check.</summary>
     public static volatile PlanView LastView;
 
-    public static void Check(PlannerContext context, OrderMode mode)
+    /// <summary>The parts the given lines need (block cost x count).</summary>
+    private static Dictionary<ItemDefinition, long> Wanted(IEnumerable<PlannedEntry> lines)
     {
-        var plan = PlanStore.Snapshot();
         var wanted = new Dictionary<ItemDefinition, long>();
-        foreach (var entry in plan)
+        foreach (var entry in lines)
             foreach (var amount in entry.Block.Items)
             {
                 wanted.TryGetValue(amount.Item, out var have);
                 wanted[amount.Item] = have + (long)Math.Ceiling(Fx.ToDouble(amount.Amount)) * entry.Count;
             }
+        return wanted;
+    }
 
-        var grids = StockScan.Run(context);
+    /// <summary>The grid the orders go to: the one with running orders, else the one with the most crafters.</summary>
+    private static GridStock OrderGrid(IReadOnlyDictionary<CubeGridComponent, GridStock> grids)
+    {
         GridStock grid = null;
         if (OrderBook.Grid != null) grids.TryGetValue(OrderBook.Grid, out grid);
-        grid ??= grids.Values.Where(g => g.Makers.Count > 0).OrderByDescending(g => g.Makers.Count).FirstOrDefault();
+        return grid ?? grids.Values.Where(g => g.Makers.Count > 0).OrderByDescending(g => g.Makers.Count).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Checks a blueprint that is not (or not yet) in the list, for the Build Planner box in the game's Blueprint
+    /// Details screen: the ore the whole blueprint costs from scratch, and whether it can be built now ("order missing":
+    /// what storage and running orders do not cover). The build list and the orders are not touched. Game thread.
+    /// </summary>
+    public static BlueprintCheck Preview(PlannerContext context, IReadOnlyCollection<PlannedEntry> lines)
+    {
+        var result = new BlueprintCheck();
+        // The stock answers are for the list as it will be after "Add": this blueprint plus the hand-picked lines that
+        // stay (a project already in the list is replaced). The ore cost is for the blueprint alone.
+        var kept = PlanStore.Snapshot().Where(e => !e.Project).ToList();
+        result.KeptBlocks = kept.Sum(e => e.Count);
+        var wanted = Wanted(lines.Concat(kept));
+        var grids = StockScan.Run(context);
+        var grid = OrderGrid(grids);
+        if (grid == null)
+        {
+            result.Errors.Add(Tr.T("hud.noCrafterAny"));
+            return result;
+        }
+        var report = PlanReport.Build(grid, wanted, OrderBook.LedgerForCheck, OrderBook.ItemsForCheck,
+            grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: true);
+        result.CanBuild = report.CanBuild;
+        var alone = kept.Count == 0 ? report : PlanReport.Build(grid, Wanted(lines), OrderBook.LedgerForCheck,
+            OrderBook.ItemsForCheck, grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: false);
+        var full = RecipeTree.Resolve(alone.Wanted, new Dictionary<string, long>(), alone.Recipes);
+        foreach (var raw in full.RawShortage.Where(r => r.Value > 0).OrderByDescending(r => r.Value))
+            (alone.IsOre(raw.Key) ? result.OreCost : result.NotMade).Add((alone.NameOf(raw.Key), raw.Value));
+        foreach (var raw in report.Tree.RawShortage.Where(r => r.Value > 0 && report.IsOre(r.Key)).OrderByDescending(r => r.Value))
+            result.MissingOre.Add((report.NameOf(raw.Key), raw.Value));
+        try
+        {
+            // "Order all": every part made new, storage used only as raw material (the window's "Problems for 'Order all'").
+            var all = PlanReport.Build(grid, wanted, OrderBook.LedgerForCheck, OrderBook.ItemsForCheck,
+                grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: false);
+            foreach (var raw in all.Tree.RawShortage.Where(r => r.Value > 0 && all.IsOre(r.Key)).OrderByDescending(r => r.Value))
+                result.AllShort.Add((all.NameOf(raw.Key), raw.Value));
+        }
+        catch (Exception e) { PluginLog.Warn("Blueprint check: the 'Order all' variant failed: " + e.Message); }
+        result.Errors.AddRange(report.Alerts.Where(a => a.Level == AlertLevel.Error).Select(a => a.Text));
+        result.Warnings.AddRange(report.Alerts.Where(a => a.Level == AlertLevel.Warning).Select(a => a.Text));
+        PluginLog.Info($"Blueprint check: {lines.Sum(l => l.Count)} blocks + {result.KeptBlocks} hand-picked in the list, can build = {result.CanBuild}; ore for all: "
+                       + string.Join(", ", result.OreCost.Select(o => $"{o.Name} {o.Amount:N0}")) + "; missing: "
+                       + string.Join(", ", result.MissingOre.Select(o => $"{o.Name} {o.Amount:N0}")) + "; order all short: "
+                       + string.Join(", ", result.AllShort.Select(o => $"{o.Name} {o.Amount:N0}")) + "; " + string.Join(" | ", result.Errors));
+        return result;
+    }
+
+    /// <summary>
+    /// "Order all" is blocked: says in the window whether "Order missing" (storage used first) would still work, as the
+    /// Build Planner box in the Blueprint Details screen does.
+    /// </summary>
+    private static void NoteMissing(PlanView view, GridStock grid, Dictionary<CubeGridComponent, GridStock> grids,
+        Dictionary<ItemDefinition, long> wanted, OrderLedger ledger)
+    {
+        try
+        {
+            var missing = PlanReport.Build(grid, wanted, ledger, OrderBook.ItemsForCheck,
+                grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), true);
+            var firstError = missing.Alerts.FirstOrDefault(a => a.Level == AlertLevel.Error)?.Text;
+            view.MissingOk = missing.Need.Count == 0 || missing.CanBuild;
+            view.MissingNote = missing.Need.Count == 0 ? Tr.T("problems.missingNone")
+                : missing.CanBuild ? Tr.T("problems.missingOk", missing.Need.Count)
+                : Tr.T("problems.missingBlocked", firstError ?? "?");
+            PluginLog.Info("Plan check (Missing, for the window): " + view.MissingNote);
+        }
+        catch (Exception e) { PluginLog.Warn("Plan check: the 'Order missing' note failed: " + e.Message); }
+    }
+
+    public static void Check(PlannerContext context, OrderMode mode)
+    {
+        var plan = PlanStore.Snapshot();
+        var wanted = Wanted(plan);
+
+        var grids = StockScan.Run(context);
+        var grid = OrderGrid(grids);
         if (grid == null)
         {
             LastView = new PlanView { Alerts = { new PlanAlert { Level = AlertLevel.Error, Text = "No crafter found on any grid you own." } } };
@@ -86,6 +190,7 @@ internal static class PlanService
                 Missing = ledger.Missing(want.Key, want.Value, stock),
             });
         }
+        if (mode == OrderMode.None && !report.CanBuild && plan.Count > 0) NoteMissing(view, grid, grids, wanted, ledger);
         LastView = view;
 
         PluginLog.Info($"Plan check ({mode}): {plan.Count} list line(s), can build = {report.CanBuild}, "

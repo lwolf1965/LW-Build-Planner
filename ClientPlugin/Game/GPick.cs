@@ -11,8 +11,9 @@ using Keen.Game2.Simulation.WorldObjects.Items;
 namespace ClientPlugin.Game;
 
 /// <summary>
-/// Keys while the terminal / G menu is open:
-///   +       adds the selected block to the build list (Shift and Ctrl for bigger steps); + and numpad + both work
+/// Keys while the terminal / G menu is open (both can be changed in the settings, Config.AddKey / Config.OpenKey):
+///   +       adds the selected block to the build list (Shift, Ctrl and Alt for bigger steps); + and numpad + both work.
+///           In the terminal's Blueprints tab it reads the selected blueprint into the list instead (BlueprintRead).
 ///   Ctrl+N  opens the planner window and brings the selected block along (PlanStore.Offered)
 /// Nothing else is a key: removing, clearing and ordering are buttons in the window.
 /// Runs on the UI thread, from the postfix of TerminalScreenViewModel.Update (see Patches).
@@ -22,13 +23,13 @@ namespace ClientPlugin.Game;
 /// </summary>
 internal static class GPick
 {
-    private const int VkN = 0x4E, VkShift = 0x10, VkControl = 0x11, VkAlt = 0x12, VkPlus = 0xBB, VkNumPlus = 0x6B;
+    private const int VkShift = 0x10, VkControl = 0x11, VkAlt = 0x12, VkPlus = 0xBB, VkNumPlus = 0x6B;
 
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
-    private static bool nLast, plusLast, numPlusLast, keysUnavailable, alive;
+    private static bool openLast, addLast, numPlusLast, keysUnavailable, alive;
 
     // The HUD field is looked up once per view model type, not every frame.
     private static Type uiFieldOwner;
@@ -47,7 +48,7 @@ internal static class GPick
             if (!alive)
             {
                 alive = true;
-                PluginLog.Info("Terminal hook alive: + adds the selected block (Shift / Ctrl bigger steps), Ctrl+N opens the planner window.");
+                PluginLog.Info($"Terminal hook alive: {KeyName(Config.Current.AddKey)} adds the selected block (Shift / Ctrl / Alt bigger steps) or, in the Blueprints tab, the selected blueprint; {KeyName(Config.Current.OpenKey)} opens the planner window.");
             }
 
             var viewModelType = terminalViewModel.GetType();
@@ -55,15 +56,24 @@ internal static class GPick
             var ui = Reflect.Get(uiField, terminalViewModel);
             for (var shown = 0; shown < 3 && PlanStore.Messages.TryDequeue(out var message); shown++)
                 HudNotify.Show(ui, message);
+            BlueprintRead.Poll(terminalViewModel); // a blueprint being read is picked up when it is ready; remembers the Blueprints tab
 
             if (keysUnavailable || !GameHasFocus()) return;
-            // N is read every frame, so holding Ctrl+N opens the window once.
             // Every key is read each frame (no short-circuit), so a held key fires once.
-            var n = Edge(VkN, ref nLast);
-            var plus = Edge(VkPlus, ref plusLast) | Edge(VkNumPlus, ref numPlusLast);
-            if (Down(VkAlt)) return;
-            if (n && Down(VkControl) && !Down(VkShift)) OpenWithSelected(terminalViewModel);
-            else if (plus) AddSelected(terminalViewModel);
+            var config = Config.Current;
+            var openKey = config.OpenKey;
+            var addKey = config.AddKey;
+            var open = openKey.IsBound && Edge(openKey.Vk, ref openLast);
+            var add = addKey.IsBound && Edge(addKey.Vk, ref addLast);
+            add |= addKey.Vk == VkPlus && Edge(VkNumPlus, ref numPlusLast);
+            // The open key needs exactly its own modifiers (Ctrl+Shift+N is not Ctrl+N); the add key takes any, they are the steps.
+            if (open && Down(VkControl) == openKey.Ctrl && Down(VkShift) == openKey.Shift && Down(VkAlt) == openKey.Alt)
+                OpenWithSelected(terminalViewModel);
+            else if (add && !(openKey.Vk == addKey.Vk && open))
+            {
+                // In the Blueprints tab the add key reads the selected blueprint; anywhere else it adds the G menu block.
+                if (!BlueprintRead.TryStart(terminalViewModel)) AddSelected(terminalViewModel);
+            }
         }
         catch (DllNotFoundException)
         {
@@ -78,11 +88,31 @@ internal static class GPick
 
     private static bool Down(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
 
-    /// <summary>Shift and Ctrl right now, for the planner window's +/- buttons (same bigger steps as the G menu keys).</summary>
-    internal static (bool Shift, bool Ctrl) Modifiers()
+    /// <summary>
+    /// A key binding as text for the log ("Ctrl+N", "+", "Insert"). The binding's own ToString uses the game's key glyphs,
+    /// which come out empty or as a lone "+" in a log line.
+    /// </summary>
+    internal static string KeyName(Settings.Tools.Binding binding)
     {
-        try { return (Down(VkShift), Down(VkControl)); }
-        catch (DllNotFoundException) { return (false, false); } // no user32 (not Windows): the buttons still work, with the small step
+        if (!binding.IsBound) return "(none)";
+        var vk = binding.Vk;
+        var key = vk switch
+        {
+            >= 0x30 and <= 0x39 or >= 0x41 and <= 0x5A => ((char)vk).ToString(),
+            >= 0x70 and <= 0x87 => "F" + (vk - 0x6F),
+            >= 0x60 and <= 0x69 => "Num" + (vk - 0x60),
+            0xBB => "+", 0xBD => "-", 0x6B => "Num+", 0x6D => "Num-", 0x2D => "Insert", 0x2E => "Delete", 0x24 => "Home", 0x23 => "End",
+            0x21 => "PageUp", 0x22 => "PageDown", 0x20 => "Space", 0x0D => "Enter", 0x09 => "Tab",
+            _ => $"VK 0x{vk:X2}",
+        };
+        return (binding.Ctrl ? "Ctrl+" : "") + (binding.Alt ? "Alt+" : "") + (binding.Shift ? "Shift+" : "") + key;
+    }
+
+    /// <summary>Shift, Ctrl and Alt right now, for the planner window's +/- buttons (same bigger steps as the G menu keys).</summary>
+    internal static (bool Shift, bool Ctrl, bool Alt) Modifiers()
+    {
+        try { return (Down(VkShift), Down(VkControl), Down(VkAlt)); }
+        catch (DllNotFoundException) { return (false, false, false); } // no user32 (not Windows): the buttons still work, with the small step
     }
 
     private static bool Edge(int vk, ref bool last)
@@ -122,7 +152,7 @@ internal static class GPick
         return offered;
     }
 
-    /// <summary>+: adds the selected block. Shift and Ctrl give bigger steps, the line's limit is kept.</summary>
+    /// <summary>+: adds the selected block. Shift, Ctrl and Alt give bigger steps (settings), the line's limit is kept.</summary>
     private static void AddSelected(object terminalViewModel)
     {
         GameLanguage.Refresh(); // the player may have switched the language
@@ -132,7 +162,7 @@ internal static class GPick
             PlanStore.Say(Tr.T("hud.selectFirst"));
             return;
         }
-        var step = PlanLimits.Step(pick.Armor, Down(VkShift), Down(VkControl));
+        var step = PlanLimits.Step(pick.Armor, Down(VkShift), Down(VkControl), Down(VkAlt));
         var added = PlanStore.AddOffered(pick, step);
         var now = PlanStore.CountOf(pick.Key);
         PlanStore.Say(added < step
@@ -152,11 +182,14 @@ internal static class GPick
     /// kind (the row of variants in the detail panel, BlockKindTileModel) and block (one per size, BlockTileModel).
     /// The G menu keeps several detail view models (shown, last selected, last hovered); the last selected one is
     /// asked first, and in it the tile it is about (CurrentTile / Tile) before SelectedSubTile, which can stay on the
-    /// group's first variant. Everything found is logged, so a wrong pick can be traced.
+    /// group's first variant. A good pick logs one line; when nothing is found, everything looked at is logged.
     /// </summary>
     private static (object Key, CubeBlockDefinition Block, string Name) SelectedBlock(object gScreen)
     {
         (object Key, CubeBlockDefinition Block, string Name) best = (null, null, null);
+        // What was looked at is logged only when no block was found (a wrong or failed pick can still be traced);
+        // a good pick writes one line.
+        var looks = new List<string>();
         foreach (var member in new[] { "LastSelectedTileDetail", "TileDetail", "LastHoveredTileDetail" })
         {
             var detail = Value(gScreen, member);
@@ -166,9 +199,9 @@ internal static class GPick
             var sizeDefinition = Value(size, "Definition");
             var shown = Value(detail, "CurrentTile") ?? Value(detail, "Tile");
             var subTile = Value(detail, "SelectedSubTile");
-            PluginLog.Info($"Pick look {member} ({detail.GetType().Name}): title '{Text(Value(detail, "TileName"))}', shown tile {Describe(shown)}, "
-                           + $"sub tile {Describe(subTile)}, size '{Text(Value(size, "Name"))}', first tile {Describe(Value(detail, "_blockTile"))}");
-            if (best.Block != null) continue; // keep logging the other details, the first hit stays
+            looks.Add($"Pick look {member} ({detail.GetType().Name}): title '{Text(Value(detail, "TileName"))}', shown tile {Describe(shown)}, "
+                      + $"sub tile {Describe(subTile)}, size '{Text(Value(size, "Name"))}', first tile {Describe(Value(detail, "_blockTile"))}");
+            if (best.Block != null) break; // the first hit stays
 
             // The tile the panel is about, if it is a variant or a block; else the selected variant.
             var kind = Value(shown, "Blocks") != null ? shown : Value(shown, "BlockKindTile") ?? subTile;
@@ -192,10 +225,8 @@ internal static class GPick
             var composite = Value(tile, "Block");
             var block = CubeOf(composite);
             if (block == null) continue;
-            PluginLog.Info($"Pick from {member}: tile {Describe(tile)}, definition {composite}, cost block {block}");
-            if (!block.Items.IsDefaultOrEmpty)
-                PluginLog.Info("Pick cost: " + string.Join(", ", block.Items.Select(a => $"{Fx.ToDouble(a.Amount)} x {OrderJob.NameOf(a.Item)}"))
-                               + $"; total {Fx.ToDouble(block.TotalItemAmount)}, optional {Fx.ToDouble(block.OptionalItemAmount)}, functional at {block.MinFunctionalBuildProgress:0.##}");
+            PluginLog.Info($"Pick from {member}: {Describe(tile)}, {composite}; cost "
+                           + (block.Items.IsDefaultOrEmpty ? "none" : string.Join(", ", block.Items.Select(a => $"{Fx.ToDouble(a.Amount)} x {OrderJob.NameOf(a.Item)}"))));
 
             var name = Text(Value(kind, "Name"));
             if (string.IsNullOrWhiteSpace(name)) name = Text(Value(tile, "Name"));
@@ -203,6 +234,8 @@ internal static class GPick
             // The size ("Block size 1") is not added to the name: it made the names long and the HUD message was cut.
             best = (composite ?? block, block, name);
         }
+        if (best.Block == null)
+            foreach (var look in looks) PluginLog.Info(look);
         return best;
     }
 

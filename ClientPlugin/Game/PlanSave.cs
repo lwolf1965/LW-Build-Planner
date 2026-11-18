@@ -39,13 +39,15 @@ internal static class PlanSave
     {
         var restored = 0;
         var dropped = 0;
+        string project = null;
         try
         {
             var path = PathOf(loaded);
             if (path != null && File.Exists(path))
             {
                 var manager = Singleton<DefinitionManager>.Instance;
-                foreach (var line in PlanFile.Read(File.ReadAllText(path)))
+                var lines = PlanFile.Read(File.ReadAllText(path), out project);
+                foreach (var line in lines)
                 {
                     if (!Guid.TryParse(line.Block, out var blockId) || !manager.TryGetDefinition(blockId, out CubeBlockDefinition block))
                     {
@@ -53,18 +55,21 @@ internal static class PlanSave
                         PluginLog.Warn($"Build list: '{line.Name}' is not in the game any more (mod removed?), dropped.");
                         continue;
                     }
-                    object key = block;
-                    if (line.Key != line.Block && Guid.TryParse(line.Key, out var keyId) && manager.TryGetDefinition(keyId, out Definition picked)) key = picked;
+                    Definition picked = block;
+                    if (line.Key != line.Block && Guid.TryParse(line.Key, out var keyId) && manager.TryGetDefinition(keyId, out Definition keyDefinition)) picked = keyDefinition;
                     var armor = PlanStore.IsArmor(block);
                     PlanStore.Restore(new PlannedEntry
                     {
-                        Key = key, Block = block, Armor = armor,
+                        // Blueprint project lines get their own key and no line limit (see PlanStore.SetProject).
+                        Key = line.Project ? new ProjectKey(picked) : picked, Block = block, Armor = armor, Project = line.Project,
                         Name = string.IsNullOrWhiteSpace(line.Name) ? GPick.NameOf(block) : line.Name,
-                        Count = Math.Min(line.Count, PlanLimits.Max(armor)),
+                        Count = line.Project ? line.Count : Math.Min(line.Count, PlanLimits.Max(armor)),
                     });
                     restored++;
                 }
             }
+            PlanStore.RestoreProject(project);
+            if (PlanStore.ProjectName != null) PluginLog.Info($"Build list: blueprint project '{PlanStore.ProjectName}' restored.");
             PluginLog.Info(path == null
                 ? "Build list: this world has no save id yet; the list is kept from its first save on."
                 : $"Build list: {restored} line(s) restored{(dropped > 0 ? $", {dropped} dropped" : "")} ({Path.GetFileName(path)}).");
@@ -89,11 +94,11 @@ internal static class PlanSave
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 var lines = PlanStore.Snapshot().Select(e => new PlanLine
                 {
-                    Key = (e.Key as Definition)?.Guid.ToString() ?? e.Block.Guid.ToString(),
-                    Block = e.Block.Guid.ToString(), Count = e.Count, Name = e.Name,
+                    Key = ((e.Key as ProjectKey)?.Composite ?? e.Key as Definition)?.Guid.ToString() ?? e.Block.Guid.ToString(),
+                    Block = e.Block.Guid.ToString(), Count = e.Count, Name = e.Name, Project = e.Project,
                 });
                 var temp = path + ".tmp";
-                File.WriteAllText(temp, PlanFile.Write(lines));
+                File.WriteAllText(temp, PlanFile.Write(lines, PlanStore.ProjectName));
                 File.Move(temp, path, true); // replace in one step: a crash never leaves half a file
             }
             catch (Exception e)

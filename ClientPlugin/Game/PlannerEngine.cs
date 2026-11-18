@@ -55,12 +55,13 @@ internal static class PlannerEngine
             var world = scene?.GameServer?.TryGet<WorldSessionComponent>();
             if (world == null || !ReferenceEquals(world.OwnedSession, session) || session.IsUnloading) return;
 
+            CrafterWatch.Saving(world.IsSaving); // save / load test: logs only when the flag changes
             var client = scene.GameClient?.TryGet<WorldSessionComponent>();
             if (client == null || world.Pause.IsPaused || client.Pause.IsPaused || world.IsSaving) return;
 
             // Idle frames (nothing queued, session already seen) stop here, before the player lookup.
             var probed = Probed.TryGetValue(session, out _);
-            if (probed && Pending.IsEmpty && !OrderBook.TickDue) return;
+            if (probed && Pending.IsEmpty && !OrderBook.TickDue && !CrafterWatch.Due) return;
 
             var players = client.OwnedSession?.SessionComponents?.TryGet<ClientPlayersSessionComponent>();
             if (players == null || !players.LocalPlayerIdentity.IsValid()) return;
@@ -73,6 +74,13 @@ internal static class PlannerEngine
             {
                 Probed.Add(session, new object()); // from now on idle frames stop early (see above)
                 ForgetWorld(world); // a world was loaded: nothing of the previous one may stay
+                CrafterWatch.NewWorld();
+            }
+
+            if (CrafterWatch.Due)
+            {
+                try { CrafterWatch.Look(context); }
+                catch (Exception e) { PluginLog.Error("Crafter watch failed: " + e); }
             }
 
             if (OrderBook.TickDue)

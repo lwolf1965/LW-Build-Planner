@@ -31,8 +31,8 @@ public sealed class PlanFacts
 
 public static class PlanAlerts
 {
-    /// <summary>Share of the free capacity above which the cargo check warns.</summary>
-    public const double TightShare = 0.8;
+    /// <summary>Share of the free capacity above which the cargo check warns (settings: cargo warning, default 80 %).</summary>
+    public static double TightShare => PlannerSettings.Current.CargoWarnPercent / 100.0;
 
     private static string N(long n) => n.ToString("N0", CultureInfo.InvariantCulture);
 
