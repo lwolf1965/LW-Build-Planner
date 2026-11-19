@@ -1,4 +1,5 @@
 // From CometWorks/client2-plugin-template (MIT, (c) 2026 Viktor Ferenczi), used unchanged unless noted.
+// LW Build Planner: wider label column (labels in 13 languages, Russian and German are long; they also wrap).
 namespace ClientPlugin.Settings;
 
 // Tweakable layout constants for the Settings UI.
@@ -10,7 +11,7 @@ internal static class SettingsLayout
     public static double DialogHeight = 840;
 
     // Width of the fixed left column used for each row's label.
-    public static double LabelColumnWidth = 180;
+    public static double LabelColumnWidth = 280;
 
     // Minimum height for each value row. Matches ControlHeight so every row
     // is exactly the same tall regardless of which control it contains; since

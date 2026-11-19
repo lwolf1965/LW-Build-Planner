@@ -317,7 +317,6 @@ internal static class BlueprintPanel
 
         private void Result(BlueprintCheck result)
         {
-            if (result.KeptBlocks > 0) Line(Tr.T("bp.withList", N(result.KeptBlocks)), Dim, 15);
             if (result.OreCost.Count > 0)
             {
                 Line(Tr.T("bp.oreCost"), Dim, 15);

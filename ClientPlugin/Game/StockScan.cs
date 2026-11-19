@@ -49,6 +49,8 @@ internal sealed class GridStock
     public readonly List<Maker> Makers = new();
     /// <summary>Crafters that exist but are not working (unfinished, damaged, unpowered ...); counted for the alerts.</summary>
     public int NonFunctionalCrafters;
+    /// <summary>Their names as the player sees them (custom names included), for the note in the window.</summary>
+    public readonly List<string> NonFunctionalNames = new();
 }
 
 /// <summary>
@@ -83,7 +85,11 @@ internal static class StockScan
 
             if (!block.Functional)
             {
-                if (machine != null) info.NonFunctionalCrafters++;
+                if (machine != null)
+                {
+                    info.NonFunctionalCrafters++;
+                    info.NonFunctionalNames.Add(block.DisplayName.EvaluateText() ?? machine);
+                }
                 continue;
             }
 

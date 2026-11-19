@@ -106,6 +106,14 @@ Check(PlanAlerts.CanBuild(PlanAlerts.Build(okTree, Good(), Nm, Ore)), "enough or
 var oreAlerts = PlanAlerts.Build(tree, Good(), Nm, Ore);
 Check(!PlanAlerts.CanBuild(oreAlerts) && oreAlerts.Any(a => a.Level == AlertLevel.Error && a.Text.Contains("Ore deficit: OreTitanium, 240")), "ore deficit is an error with the amount");
 
+var broken = Good(); broken.NonFunctionalCrafters = 7;
+broken.NonFunctionalNames.AddRange(new[] { "Assembler 5 m", "Assembler 5 m", "Smelter 2.5 m", "Refinery", "Fabricator", "Gearforge" });
+var brokenAlert = PlanAlerts.Build(okTree, broken, Nm, Ore).FirstOrDefault(a => a.Text.Contains("Assembler 5 m (2)"));
+Check(brokenAlert != null && brokenAlert.Level == AlertLevel.Warning && brokenAlert.Text.Contains("Fabricator, Gearforge, Refinery, +1") && !brokenAlert.Text.Contains("Smelter"),
+    "crafters not working are named (same names counted, at most 4 shown)");
+var countOnly = Good(); countOnly.NonFunctionalCrafters = 2;
+Check(PlanAlerts.Build(okTree, countOnly, Nm, Ore).Any(a => a.Text.StartsWith("2 crafter(s) not working")), "crafters not working without names: the count");
+
 var noFab = Good(); noFab.UsableCrafters.Remove("Fabricator");
 var noFabAlerts = PlanAlerts.Build(okTree, noFab, Nm, Ore);
 Check(!PlanAlerts.CanBuild(noFabAlerts) && noFabAlerts.Any(a => a.Text.StartsWith("No Fabricator") && a.Text.Contains("AdvancedCompressor")), "missing crafter kind blocks the build");
@@ -178,6 +186,26 @@ var usedTree = RecipeTree.Resolve(new Dictionary<string, long> { ["SteelTube"] =
 Check(usedTree.Consumed["SteelTube"] == 1 && usedTree.Consumed["OreIron"] == 10, "consumed stock is reported (1 tube, ore for 2 more)");
 
 Check(PlanLimits.Step(true, false, true) == 100 && PlanLimits.Step(false, false, true) == 10 && PlanLimits.Step(false, true, false) == 5, "armor by the hundred, other blocks by the handful");
+{
+    // A crafter that finished its queue has made its whole line, even when the parts were taken from storage at once.
+    var l = new OrderLedger();
+    l.Commit(new Dictionary<string, long> { ["plate"] = 100 });
+    l.MarkQueued(1, "plate", 50);
+    l.MarkQueued(2, "plate", 50);
+    l.Arrived("plate", 30, new[] { 1 });
+    var qcFirst = l.CrafterFinished(1, "plate");
+    var qcAgain = l.CrafterFinished(1, "plate");
+    Check(qcFirst == 20 && qcAgain == 0 && l.Done("plate") == 50 && l.QueuedOf("plate") == 50 && l.Active,
+        "queue check: a crafter with an empty queue makes the rest of its line done, once");
+    var qcSecond = l.CrafterFinished(2, "plate");
+    l.Arrived("plate", 40); // seen later: nothing is counted twice
+    Check(qcSecond == 50 && l.Done("plate") == 100 && !l.Active && l.CrafterFinished(3, "plate") == 0,
+        "queue check: all crafters done = order done, late arrivals are not counted twice");
+}
+Check(PlanLimits.IsArmor("CubeBlockDefinition", @"e7f8da13-3742-4d19-bb83-5e8900e819a8 : Vanilla\Armors\Cube\50\Light\ArmorCubeLight50_LightArmorCubeBlockDefinition.def")
+      && PlanLimits.IsArmor("ArmorBlockDefinition", null)
+      && !PlanLimits.IsArmor("CubeBlockDefinition", @"a5ca6893-65d2-46e6-b3ab-f30bf867ea72 : Vanilla\Blocks\Thrusters\Hydrogen\50\HydrogenThruster50_HydrogenThrustersPowerableBlockDefinition.def")
+      && !PlanLimits.IsArmor(null, null), "armor is told by the definition (path / type), not by the shown name");
 Check(PlanLimits.Apply(995, 100, true) == 1000 && PlanLimits.Apply(45, 10, false) == 50 && PlanLimits.Apply(3, -10, false) == 0, "counts stay between 0 and the limit");
 // ---- settings (PlannerSettings): steps, limits, batch size and cargo warning come from the settings dialog
 var defaults = PlannerSettings.Current;

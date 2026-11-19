@@ -27,6 +27,7 @@ internal static class RowBuilder
             Text = labelText,
             Foreground = LabelForeground,
             FontSize = 20,
+            TextWrapping = TextWrapping.Wrap, // LW Build Planner: long labels (other languages) wrap instead of being cut
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 8, 0),
         };

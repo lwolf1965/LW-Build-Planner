@@ -5,8 +5,11 @@ Version scheme: STAGE.FEATURE.FIX.BUILD (0.1 = game alpha).
 ## 0.1.1.0 (not released yet, branch `blueprint`)
 - Whole blueprints: in the terminal's Blueprints tab the add key reads the selected blueprint (every block of every grid, armor included, counted per block kind) and puts it into the build list as the blueprint project — a heading with name, blocks and kinds, its own lines without a line limit, an X to remove it. One blueprint at a time (a new one replaces it; hand-picked lines stay). Same-name blocks get their size ("2.5 m"). Saved with the world (list file version 2; version 1 files are still read).
 - Build Planner box in the game's Blueprint Details screen (in the free left column; the game's own buttons are not moved): blocks and kinds, the ore the whole blueprint costs from scratch (one ore per line), whether it can be built from current stock with Order missing (else the missing ore or the first problem), the ore Order all would lack, and an Add to Build Planner button (a second click confirms replacing another blueprint). Reads only until the button is pressed.
-- The blueprint box checks stock for the blueprint together with the hand-picked blocks already in the list (as the list will be after Add).
-- The settings dialog (title, sections, labels, tips) is in the game's language, like the planner window.
+- Orders finish by the crafters' own queues: when a crafter no longer has the part's recipe in its queue, its batch counts as made, even when the parts left storage at once (welding while crafting used to leave a false "not progressing" and an order that never finished). Storage arrivals still drive the progress bar.
+- Fixed: vanilla armor (e.g. Light Armor Cube) was taken for a working block and got the 50 limit and the small steps; armor is now told by the block definition's path, so it gets the armor limit (1000) and steps.
+- The settings dialog (title, sections, labels, tips) is in the game's language, like the planner window. The label column is wider and long labels wrap (Russian, German); whole-number sliders show "50", not "50.00".
+- The build list is written when the game saves the world (Save, Save as, autosave, the save when leaving), no longer after every change: after "exit without saving" or a crash the list matches the save the world goes back to. An empty list leaves no file. The manual explains what to do when a block misses a part after a load.
+- Notes name the crafters that are not working (e.g. "Assembler 5 m (2), Smelter 2.5 m"), at most four names and "+N" for the rest.
 - Less noise: "all crafters busy" is said once per order; the log writes order progress at most every 30 s per part and one line per picked block.
 - The same HUD message is shown once when it repeats within 4 s (e.g. the add key pressed quickly with nothing selected).
 - Planner window: when Order all is blocked, the Problems box also says whether Order missing would work (green) or is blocked too (red).
@@ -16,7 +19,7 @@ Version scheme: STAGE.FEATURE.FIX.BUILD (0.1 = game alpha).
   - Steps: Shift, Ctrl and the new Alt step sizes and the most blocks per line, for working blocks and for armor.
 - The planner's logic reads the settings as plain values (Policy/PlannerSettings.cs, kept in range, tested); the defaults are the old behaviour.
 
-## 0.1.0.1 (not released)
+## 0.1.0.1 (first test build, listed in PluginHub-SE2)
 First test build.
 - Hub review fixes (PR #41): HUD notifications show on time also while no terminal is open (they waited for the next G menu); the game's text lookups no longer take a lock until the first planner message; Pulsar's data folder is no longer created at start; SECURITY.md, CONTRIBUTING.md and the pull request template describe what the plugin really does (the per-world list file, the keys it reads); the built DLL is no longer kept in the repository (builds go to GitHub releases); the manual explains the one case where the game merges a planner batch into a part you queued by hand.
 - Pick blocks in the G menu with `+` (Shift and Ctrl for bigger steps); limits per list line: armor 1000, other blocks 50.

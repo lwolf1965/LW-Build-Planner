@@ -14,9 +14,12 @@ namespace ClientPlugin.Game;
 /// <summary>
 /// Keeps the build list of each world across save and restart: one small file per world in the plugin's own folder
 /// under the game's user-data folder (Singleton&lt;VRageCore&gt;.Instance.AppDataPath\LwBuildPlanner\Worlds), named after
-/// the world's save id (WorldSessionComponent.SaveContainerId). Written after every change of the list, read when a
-/// world loads. A world that was never saved has no id yet: its list is kept from the first save on.
-/// Orders are not kept: after a restart the crafters finish what they have, and "Order missing" orders the rest.
+/// the world's save id (WorldSessionComponent.SaveContainerId). Written when the game saves the world (every kind of
+/// save, see WorldSavePatch), so the file always belongs to the save the world goes back to: after "exit without saving"
+/// or a crash the list is the one of the last save, not one with changes the world never saw. An empty list leaves no
+/// file (an old one is removed). Read when a world loads. Save as / a new world's first save get their own file.
+/// Orders are not kept: the game keeps the crafters' queues in its save, the crafters finish what they have, and
+/// "Order missing" orders the rest.
 /// Blocks are found again by their definition Guid (DefinitionManager.TryGetDefinition); a block the game no longer
 /// knows (mod removed) is dropped with a log line. Any file error is logged and never stops the game.
 /// </summary>
@@ -25,6 +28,9 @@ internal static class PlanSave
     private static readonly object Gate = new();
     private static WeakReference<WorldSessionComponent> world;
     private static string lastId;
+    // What the file holds now (null: no file), so an autosave with an unchanged list writes nothing.
+    private static string writtenPath;
+    private static string writtenText;
 
     private static string Folder => Path.Combine(Singleton<VRageCore>.Instance.AppDataPath, "LwBuildPlanner", "Worlds");
 
@@ -43,10 +49,16 @@ internal static class PlanSave
         try
         {
             var path = PathOf(loaded);
-            if (path != null && File.Exists(path))
+            var text = path != null && File.Exists(path) ? File.ReadAllText(path) : null;
+            lock (Gate)
+            {
+                writtenPath = path;
+                writtenText = text;
+            }
+            if (text != null)
             {
                 var manager = Singleton<DefinitionManager>.Instance;
-                var lines = PlanFile.Read(File.ReadAllText(path), out project);
+                var lines = PlanFile.Read(text, out project);
                 foreach (var line in lines)
                 {
                     if (!Guid.TryParse(line.Block, out var blockId) || !manager.TryGetDefinition(blockId, out CubeBlockDefinition block))
@@ -71,7 +83,7 @@ internal static class PlanSave
             PlanStore.RestoreProject(project);
             if (PlanStore.ProjectName != null) PluginLog.Info($"Build list: blueprint project '{PlanStore.ProjectName}' restored.");
             PluginLog.Info(path == null
-                ? "Build list: this world has no save id yet; the list is kept from its first save on."
+                ? "Build list: this world has no save id yet; the list is written from its first save on."
                 : $"Build list: {restored} line(s) restored{(dropped > 0 ? $", {dropped} dropped" : "")} ({Path.GetFileName(path)}).");
         }
         catch (Exception e)
@@ -81,25 +93,46 @@ internal static class PlanSave
         lock (Gate) world = new WeakReference<WorldSessionComponent>(loaded);
     }
 
-    /// <summary>After every change of the list (any thread): writes the list of the current world.</summary>
-    public static void Save()
+    /// <summary>
+    /// The game is saving this world (any thread; called by WorldSavePatch before the world's state is captured): the
+    /// list goes to the file of the save being written; an empty list removes the file. Unchanged: nothing is written.
+    /// Another session's save (not the attached world) is ignored. Never throws: a file error is logged only.
+    /// </summary>
+    public static void WorldSaving(WorldSessionComponent saving)
     {
         lock (Gate)
         {
-            if (world == null || !world.TryGetTarget(out var current)) return;
+            if (world == null || !world.TryGetTarget(out var current) || !ReferenceEquals(current, saving)) return;
             try
             {
                 var path = PathOf(current);
-                if (path == null) return; // not saved yet
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                var lines = PlanStore.Snapshot().Select(e => new PlanLine
+                if (path == null) return; // no save id: nothing to name the file by
+                var entries = PlanStore.Snapshot();
+                if (entries.Count == 0)
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                        PluginLog.Info($"Build list: empty at the world save, {Path.GetFileName(path)} removed.");
+                    }
+                    writtenPath = path;
+                    writtenText = null;
+                    return;
+                }
+                var lines = entries.Select(e => new PlanLine
                 {
                     Key = ((e.Key as ProjectKey)?.Composite ?? e.Key as Definition)?.Guid.ToString() ?? e.Block.Guid.ToString(),
                     Block = e.Block.Guid.ToString(), Count = e.Count, Name = e.Name, Project = e.Project,
                 });
+                var text = PlanFile.Write(lines, PlanStore.ProjectName);
+                if (path == writtenPath && text == writtenText && File.Exists(path)) return; // e.g. autosave, list unchanged
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 var temp = path + ".tmp";
-                File.WriteAllText(temp, PlanFile.Write(lines, PlanStore.ProjectName));
+                File.WriteAllText(temp, text);
                 File.Move(temp, path, true); // replace in one step: a crash never leaves half a file
+                writtenPath = path;
+                writtenText = text;
+                PluginLog.Info($"Build list: {entries.Count} line(s) written with the world save ({Path.GetFileName(path)}).");
             }
             catch (Exception e)
             {

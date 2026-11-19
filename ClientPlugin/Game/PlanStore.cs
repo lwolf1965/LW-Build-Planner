@@ -43,7 +43,7 @@ internal sealed class ProjectKey
 /// Lines are kept per picked variant (the G menu tile's definition), because several variants can share one cost.
 /// A line that reaches 0 leaves the list. Entries are never changed in place: every change stores a new entry, so a
 /// snapshot taken for the screen stays consistent.
-/// Saved per world by PlanSave after every change (see there).
+/// Saved per world by PlanSave when the game saves the world (see there).
 /// </summary>
 internal static class PlanStore
 {
@@ -71,7 +71,6 @@ internal static class PlanStore
             foreach (var line in lines) Entries[line.Key] = line;
             ProjectName = lines.Count > 0 ? name : null;
         }
-        PlanSave.Save();
         return previous;
     }
 
@@ -83,7 +82,6 @@ internal static class PlanStore
             foreach (var key in Entries.Where(p => p.Value.Project).Select(p => p.Key).ToList()) Entries.Remove(key);
             ProjectName = null;
         }
-        PlanSave.Save();
     }
 
     /// <summary>The project's name read back from the world's file (PlanSave).</summary>
@@ -113,7 +111,6 @@ internal static class PlanStore
                 Entries[offered.Key] = new PlannedEntry { Key = offered.Key, Name = offered.Name, Block = offered.Block, Count = after, Armor = offered.Armor };
             added = after - before;
         }
-        if (added != 0) PlanSave.Save();
         return added;
     }
 
@@ -126,7 +123,7 @@ internal static class PlanStore
     /// <summary>Messages for the player; shown by the UI thread as HUD notifications and always logged.</summary>
     public static readonly ConcurrentQueue<string> Messages = new();
 
-    public static bool IsArmor(CubeBlockDefinition block) => block.GetType().Name.Contains("Armor", StringComparison.OrdinalIgnoreCase);
+    public static bool IsArmor(CubeBlockDefinition block) => block != null && PlanLimits.IsArmor(block.GetType().Name, block.ToString());
 
     /// <summary>Adds (or with a negative count removes) blocks; returns the new count of that line.</summary>
     public static int Add(object variantKey, string name, CubeBlockDefinition block, int count)
@@ -139,7 +136,6 @@ internal static class PlanStore
             if (now == 0) Entries.Remove(variantKey);
             else Entries[variantKey] = new PlannedEntry { Key = variantKey, Name = name, Block = block, Count = now, Armor = IsArmor(block) };
         }
-        PlanSave.Save();
         return now;
     }
 
@@ -159,7 +155,6 @@ internal static class PlanStore
             else Entries[variantKey] = entry.With(now);
             ForgetEmptyProject();
         }
-        PlanSave.Save();
         return now;
     }
 
@@ -171,7 +166,6 @@ internal static class PlanStore
             Entries.Remove(variantKey);
             ForgetEmptyProject();
         }
-        PlanSave.Save();
     }
 
     public static int CountOf(object variantKey)
@@ -179,7 +173,7 @@ internal static class PlanStore
         lock (Gate) return Entries.TryGetValue(variantKey, out var entry) ? entry.Count : 0;
     }
 
-    /// <summary>Empties the list (Clear list button: saved; a world change: PlanSave is detached first, nothing written).</summary>
+    /// <summary>Empties the list (Clear list button, or a world change). The file follows at the next world save.</summary>
     public static void Clear()
     {
         lock (Gate)
@@ -188,7 +182,6 @@ internal static class PlanStore
             Ordered.Clear();
             ProjectName = null;
         }
-        PlanSave.Save();
     }
 
     /// <summary>Blocks per line that the running orders cover (see OrderedBlocks). Not saved: orders are not saved either.</summary>
@@ -229,7 +222,6 @@ internal static class PlanStore
             Ordered.Clear();
             ForgetEmptyProject();
         }
-        if (taken > 0) PlanSave.Save();
         return taken;
     }
 

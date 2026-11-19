@@ -25,6 +25,8 @@ public sealed class PlanFacts
     public readonly List<(string Name, string Machine)> UnlinkedCrafters = new();
     public readonly List<string> UnlinkedStorages = new();
     public int NonFunctionalCrafters;
+    /// <summary>Names of those crafters (may be empty: then only the count is said).</summary>
+    public readonly List<string> NonFunctionalNames = new();
     /// <summary>Item id to the amount lying in storage that has no conveyor link (only items the plan touches).</summary>
     public readonly Dictionary<string, long> StockInUnlinked = new();
 }
@@ -68,7 +70,9 @@ public static class PlanAlerts
             Add(AlertLevel.Warning, Tr.T("alert.storageUnlinked", storage));
         foreach (var kv in facts.StockInUnlinked.OrderBy(k => nameOf(k.Key), StringComparer.OrdinalIgnoreCase))
             Add(AlertLevel.Warning, Tr.T("alert.stranded", nameOf(kv.Key), N(kv.Value)));
-        if (facts.NonFunctionalCrafters > 0)
+        if (facts.NonFunctionalNames.Count > 0)
+            Add(AlertLevel.Warning, Tr.T("alert.brokenNames", Names(facts.NonFunctionalNames, 4)));
+        else if (facts.NonFunctionalCrafters > 0)
             Add(AlertLevel.Warning, Tr.T("alert.broken", facts.NonFunctionalCrafters));
 
         return alerts.OrderByDescending(a => a.Level).ToList();
@@ -101,6 +105,15 @@ public static class PlanAlerts
         if (need > TightShare * free)
             return new PlanAlert { Level = AlertLevel.Warning, Text = Tr.T("space.tight", take, room, most) };
         return null;
+    }
+
+    /// <summary>"Assembler 5 m (2), Smelter 2.5 m, +3": same names counted, at most max shown.</summary>
+    public static string Names(IEnumerable<string> names, int max)
+    {
+        var groups = names.GroupBy(n => n).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase).ToList();
+        var shown = groups.Take(max).Select(g => g.Count() > 1 ? $"{g.Key} ({g.Count()})" : g.Key).ToList();
+        if (groups.Count > max) shown.Add("+" + groups.Skip(max).Sum(g => g.Count()));
+        return string.Join(", ", shown);
     }
 
     public static bool CanBuild(IEnumerable<PlanAlert> alerts) => alerts.All(a => a.Level != AlertLevel.Error);

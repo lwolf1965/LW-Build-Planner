@@ -37,8 +37,6 @@ internal sealed class PlanView
 internal sealed class BlueprintCheck
 {
     public bool CanBuild;
-    /// <summary>Hand-picked blocks in the list that were checked together with the blueprint (0: none).</summary>
-    public int KeptBlocks;
     /// <summary>Ore the whole blueprint needs from scratch, biggest first.</summary>
     public List<(string Name, long Amount)> OreCost = new();
     /// <summary>Raw materials the crafters here cannot make (e.g. ingots with no refinery), for the whole blueprint.</summary>
@@ -100,11 +98,7 @@ internal static class PlanService
     public static BlueprintCheck Preview(PlannerContext context, IReadOnlyCollection<PlannedEntry> lines)
     {
         var result = new BlueprintCheck();
-        // The stock answers are for the list as it will be after "Add": this blueprint plus the hand-picked lines that
-        // stay (a project already in the list is replaced). The ore cost is for the blueprint alone.
-        var kept = PlanStore.Snapshot().Where(e => !e.Project).ToList();
-        result.KeptBlocks = kept.Sum(e => e.Count);
-        var wanted = Wanted(lines.Concat(kept));
+        var wanted = Wanted(lines);
         var grids = StockScan.Run(context);
         var grid = OrderGrid(grids);
         if (grid == null)
@@ -115,11 +109,9 @@ internal static class PlanService
         var report = PlanReport.Build(grid, wanted, OrderBook.LedgerForCheck, OrderBook.ItemsForCheck,
             grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: true);
         result.CanBuild = report.CanBuild;
-        var alone = kept.Count == 0 ? report : PlanReport.Build(grid, Wanted(lines), OrderBook.LedgerForCheck,
-            OrderBook.ItemsForCheck, grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: false);
-        var full = RecipeTree.Resolve(alone.Wanted, new Dictionary<string, long>(), alone.Recipes);
+        var full = RecipeTree.Resolve(report.Wanted, new Dictionary<string, long>(), report.Recipes);
         foreach (var raw in full.RawShortage.Where(r => r.Value > 0).OrderByDescending(r => r.Value))
-            (alone.IsOre(raw.Key) ? result.OreCost : result.NotMade).Add((alone.NameOf(raw.Key), raw.Value));
+            (report.IsOre(raw.Key) ? result.OreCost : result.NotMade).Add((report.NameOf(raw.Key), raw.Value));
         foreach (var raw in report.Tree.RawShortage.Where(r => r.Value > 0 && report.IsOre(r.Key)).OrderByDescending(r => r.Value))
             result.MissingOre.Add((report.NameOf(raw.Key), raw.Value));
         try
@@ -133,7 +125,7 @@ internal static class PlanService
         catch (Exception e) { PluginLog.Warn("Blueprint check: the 'Order all' variant failed: " + e.Message); }
         result.Errors.AddRange(report.Alerts.Where(a => a.Level == AlertLevel.Error).Select(a => a.Text));
         result.Warnings.AddRange(report.Alerts.Where(a => a.Level == AlertLevel.Warning).Select(a => a.Text));
-        PluginLog.Info($"Blueprint check: {lines.Sum(l => l.Count)} blocks + {result.KeptBlocks} hand-picked in the list, can build = {result.CanBuild}; ore for all: "
+        PluginLog.Info($"Blueprint check: {lines.Sum(l => l.Count)} blocks, can build = {result.CanBuild}; ore for all: "
                        + string.Join(", ", result.OreCost.Select(o => $"{o.Name} {o.Amount:N0}")) + "; missing: "
                        + string.Join(", ", result.MissingOre.Select(o => $"{o.Name} {o.Amount:N0}")) + "; order all short: "
                        + string.Join(", ", result.AllShort.Select(o => $"{o.Name} {o.Amount:N0}")) + "; " + string.Join(" | ", result.Errors));

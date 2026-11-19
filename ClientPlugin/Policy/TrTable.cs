@@ -442,19 +442,19 @@ public static partial class Tr
         },
         ["orders.none"] = new[]
         {
-            /* en */ "No orders. Add blocks with + in the G menu.",
-            /* cs */ "Žádné objednávky. Přidejte bloky klávesou + v menu G.",
-            /* de */ "Keine Aufträge. Füge Blöcke mit + im G-Menü hinzu.",
-            /* es */ "Sin pedidos. Añade bloques con + en el menú G.",
-            /* fr */ "Aucune commande. Ajoutez des blocs avec + dans le menu G.",
-            /* it */ "Nessun ordine. Aggiungi blocchi con + nel menu G.",
-            /* pl */ "Brak zamówień. Dodaj bloki klawiszem + w menu G.",
-            /* pt */ "Sem pedidos. Adicione blocos com + no menu G.",
-            /* ru */ "Заказов нет. Добавьте блоки клавишей + в меню G.",
-            /* sk */ "Žiadne objednávky. Pridajte bloky klávesom + v menu G.",
-            /* tr */ "Sipariş yok. G menüsünde + ile blok ekle.",
-            /* uk */ "Замовлень немає. Додайте блоки клавішею + у меню G.",
-            /* zh */ "没有订单。在 G 菜单中用 + 添加方块。",
+            /* en */ "No orders added yet.",
+            /* cs */ "Zatím nejsou přidány žádné objednávky.",
+            /* de */ "Noch keine Aufträge hinzugefügt.",
+            /* es */ "Aún no se han añadido pedidos.",
+            /* fr */ "Aucune commande ajoutée pour l'instant.",
+            /* it */ "Nessun ordine aggiunto finora.",
+            /* pl */ "Nie dodano jeszcze zamówień.",
+            /* pt */ "Nenhum pedido adicionado ainda.",
+            /* ru */ "Заказы ещё не добавлены.",
+            /* sk */ "Zatiaľ nie sú pridané žiadne objednávky.",
+            /* tr */ "Henüz sipariş eklenmedi.",
+            /* uk */ "Замовлення ще не додано.",
+            /* zh */ "尚未添加订单。",
         },
         ["orders.allDone"] = new[]
         {
@@ -1704,22 +1704,6 @@ public static partial class Tr
             /* uk */ "«Дозамовити» теж заблоковано: {0}",
             /* zh */ "“订购缺少的”也被阻止：{0}",
         },
-        ["bp.withList"] = new[]
-        {
-            /* en */ "Checked together with the {0} hand-picked blocks in your list.",
-            /* cs */ "Zkontrolováno spolu s {0} ručně vybranými bloky v seznamu.",
-            /* de */ "Zusammen mit den {0} selbst gewählten Blöcken der Liste geprüft.",
-            /* es */ "Comprobado junto con los {0} bloques elegidos a mano de tu lista.",
-            /* fr */ "Vérifié avec les {0} blocs choisis à la main de votre liste.",
-            /* it */ "Controllato insieme ai {0} blocchi scelti a mano nella lista.",
-            /* pl */ "Sprawdzone razem z {0} ręcznie wybranymi blokami z listy.",
-            /* pt */ "Verificado junto com os {0} blocos escolhidos à mão na lista.",
-            /* ru */ "Проверено вместе с блоками, выбранными вручную в списке: {0}.",
-            /* sk */ "Skontrolované spolu s {0} ručne vybranými blokmi v zozname.",
-            /* tr */ "Listedeki {0} elle seçilmiş blokla birlikte kontrol edildi.",
-            /* uk */ "Перевірено разом із блоками, вибраними вручну у списку: {0}.",
-            /* zh */ "已与清单中手动选择的 {0} 个方块一起检查。",
-        },
         ["set:Keep list when done"] = new[]
         {
             /* en */ "Keep list when done",
@@ -2231,6 +2215,22 @@ public static partial class Tr
             /* tr */ "İnşa listesinin bir satırındaki en fazla zırh bloğu. Varsayılan 1000.",
             /* uk */ "Максимум блоків броні в рядку списку будівництва. Типово 1000.",
             /* zh */ "建造清单每行最多装甲方块数。默认 1000。",
+        },
+        ["alert.brokenNames"] = new[]
+        {
+            /* en */ "Not working, not used (unfinished, damaged or unpowered?): {0}.",
+            /* cs */ "Nefunkční, nepoužívají se (nedostavěné, poškozené nebo bez napájení?): {0}.",
+            /* de */ "Arbeiten nicht, nicht genutzt (unfertig, beschädigt oder ohne Strom?): {0}.",
+            /* es */ "No funcionan, no se usan (¿sin terminar, dañados o sin energía?): {0}.",
+            /* fr */ "Ne fonctionnent pas, non utilisés (inachevés, endommagés ou sans énergie ?) : {0}.",
+            /* it */ "Non funzionano, non usati (incompleti, danneggiati o senza energia?): {0}.",
+            /* pl */ "Nie działają, nieużywane (niedokończone, uszkodzone lub bez zasilania?): {0}.",
+            /* pt */ "Não funcionam, não usados (inacabados, danificados ou sem energia?): {0}.",
+            /* ru */ "Не работают, не используются (не достроены, повреждены или без питания?): {0}.",
+            /* sk */ "Nefungujú, nepoužívajú sa (nedostavané, poškodené alebo bez napájania?): {0}.",
+            /* tr */ "Çalışmıyor, kullanılmıyor (bitmemiş, hasarlı veya enerjisiz?): {0}.",
+            /* uk */ "Не працюють, не використовуються (не добудовані, пошкоджені чи без живлення?): {0}.",
+            /* zh */ "未工作、未使用（未建完、损坏或无电？）：{0}。",
         },
     };
 }

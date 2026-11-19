@@ -231,6 +231,21 @@ internal static class OrderBook
         foreach (var id in Ledger.CraftersWithOrders.Where(c => !byId.ContainsKey(c)).ToList())
             PluginLog.Info($"Crafter '{(CrafterNames.TryGetValue(id, out var gone) ? gone : "?")}' is gone, its orders are closed: {string.Join(", ", Ledger.CrafterDone(id).Select(NameOf))}");
 
+        // 1b. The crafters' queues: a crafter that no longer has the recipe of its line in its queue has made all of it,
+        //     even when the parts went out of storage at once (welding while crafting: stream test 2026-11-19, 1,800
+        //     Steel Plate made, ~200 never seen arriving, a false "not progressing"). Storage rise stays the progress bar.
+        foreach (var (crafterId, itemId, _) in Ledger.QueuedLines.ToList())
+        {
+            if (!byId.TryGetValue(crafterId, out var maker) || !Items.TryGetValue(itemId, out var item)) continue;
+            var recipe = CrafterApi.CanProduce(maker.Converter, item);
+            if (recipe == null || CrafterApi.IsProducing(maker.Converter, recipe) != false) continue;
+            var credited = Ledger.CrafterFinished(crafterId, itemId);
+            LastProgress[itemId] = now;
+            Told.Remove("stuck:" + itemId);
+            if (credited > 0)
+                PluginLog.Info($"Order progress: '{maker.Name}' has no {NameOf(itemId)} left in its queue, its last {credited} count as made (taken from storage before they were seen)");
+        }
+
         // 2. No arrivals for a minute and none of the item's crafters working: tell the player, keep the line.
         Notes.Clear();
         foreach (var itemId in Ledger.QueuedLines.Select(q => q.Item).Distinct().ToList())

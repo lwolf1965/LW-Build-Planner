@@ -35,6 +35,19 @@ internal static class SessionUpdatePatch
 }
 
 /// <summary>
+/// The game saves the world (every kind: Save, Save as, autosave, the save when leaving): the build list file is written
+/// at the same moment, so after a crash or "exit without saving" the list matches the save the world goes back to.
+/// WorldSessionComponent.SaveSessionStateToContainerAsync is where every save captures the world's state; by then
+/// SaveContainerId already names the save (also the first save of a new world). Found by name: a renamed method only
+/// disables the list file (logged at start by Harmony), never the game's save.
+/// </summary>
+[HarmonyPatch(typeof(WorldSessionComponent), "SaveSessionStateToContainerAsync")]
+internal static class WorldSavePatch
+{
+    private static void Prefix(WorldSessionComponent __instance) => PlanSave.WorldSaving(__instance);
+}
+
+/// <summary>
 /// UI-thread tick while a terminal screen (which also hosts the G menu) exists: reads the planner keys and shows the
 /// planner's HUD messages. Target found by name, so a renamed game class only disables this hook (logged at start).
 /// </summary>

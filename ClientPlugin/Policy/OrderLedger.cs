@@ -134,6 +134,19 @@ public sealed class OrderLedger
         return Math.Max(0, amount);
     }
 
+    /// <summary>
+    /// The crafter no longer has this part's recipe in its queue (the game's own check): it has made all of its line,
+    /// even when the parts left storage at once (taken for welding) and were never seen arriving. The rest of the
+    /// line counts as done. Returns how many were credited this way.
+    /// </summary>
+    public long CrafterFinished(int crafter, string item)
+    {
+        if (!queued.TryGetValue((crafter, item), out var left) || left <= 0) return 0;
+        queued.Remove((crafter, item));
+        doneCount[item] = (doneCount.TryGetValue(item, out var d) ? d : 0) + left;
+        return left;
+    }
+
     /// <summary>The crafter is gone (removed, grid lost): its lines are closed. Returns the items it had.</summary>
     public List<string> CrafterDone(int crafter)
     {
@@ -160,6 +173,15 @@ public sealed class OrderLedger
 /// <summary>How many blocks one key press adds and how many a list line may hold.</summary>
 public static class PlanLimits
 {
+    /// <summary>
+    /// Armor is told by "Armor" in the block definition's type name or in its text ("guid : Vanilla\Armors\Cube\...
+    /// \ArmorCubeLight250_LightArmorCubeBlockDefinition.def"), never by the shown name, which is in the game's language.
+    /// (The type name alone missed vanilla armor: Light Armor Cube got the 50 limit, 2026-11-19.)
+    /// </summary>
+    public static bool IsArmor(string definitionTypeName, string definitionText)
+        => (definitionTypeName?.Contains("Armor", System.StringComparison.OrdinalIgnoreCase) ?? false)
+           || (definitionText?.Contains("Armor", System.StringComparison.OrdinalIgnoreCase) ?? false);
+
     /// <summary>
     /// Armor is placed by the hundred; working blocks (thrusters, tanks ...) by the handful. The sizes come from the
     /// settings (defaults: armor 1 / Shift 10 / Ctrl 100 / Alt 500, other blocks 1 / 5 / 10 / 25). Alt beats Ctrl beats Shift.

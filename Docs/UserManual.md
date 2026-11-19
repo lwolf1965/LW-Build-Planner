@@ -2,13 +2,13 @@
 
 English | [Русский](UserManual.ru.md)
 
-Version 0.1.0.1 (test build). Single player.
+Version 0.1.1.0 (test build). Single player.
 
 ## What it is for
 You want to build something, for example ten hydrogen thrusters. The planner tells you which parts that needs, what is already in your storage, and orders the rest from your crafters.
 
 ## Install
-Install [Pulsar](https://github.com/SpaceGT/Pulsar) (the plugin loader for Space Engineers 2). Once LW Build Planner is listed in the PluginHub, open the plugin list in Pulsar, enable **LW Build Planner** and restart the game. Nothing has to be set up; the plugin works in every world you load.
+Install [Pulsar](https://github.com/SpaceGT/Pulsar) (the plugin loader for Space Engineers 2). Open the plugin list in Pulsar (LW Build Planner is listed in the PluginHub), enable **LW Build Planner** and restart the game. Nothing has to be set up; the plugin works in every world you load.
 
 ## Quick start
 1. In the G menu select a block and press **+**. Do this for every block you want to build.
@@ -46,8 +46,6 @@ Note: the "Components" list in the G menu itself shows the cost of the first var
 - when only **Order all** (every part made new) would run short, the ore it lacks, in orange,
 - an **Add to Build Planner** button. If another blueprint is already in the list, the first click asks ("Again: replace …"), the second replaces it. If this blueprint is already in the list, the button updates it.
 
-The stock answers are for the list as it will be after **Add**: the blueprint together with the blocks you picked by hand (the box says how many). The ore cost is for the blueprint alone.
-
 The box only reads: nothing is placed, ordered or changed until you press its button. Stock means storage and crafters on your grids, minus what running orders still need.
 
 The planner window says the same for the whole list: when **Order all** is blocked, its Problems box adds whether **Order missing** would still work (green) or is blocked too (red).
@@ -71,7 +69,7 @@ The window scrolls (mouse wheel or scroll bar) and is made of boxes, each with a
 
 What you carry yourself is not counted.
 
-**Problems for 'Order all'**: reasons an order is blocked, see section 4. "Order all" stays grey while there is a problem; make the list smaller with `[-]` and it opens again. The box also says whether "Order missing" would still work (storage covers the rest); if it is blocked too, "Order missing" is grey as well. After mining or moving cargo, press **Check** to check again. Warnings that do not block an order are shown in a **Notes** box instead.
+**Problems for 'Order all'**: reasons an order is blocked, see section 4. "Order all" stays grey while there is a problem; make the list smaller with `[-]` and it opens again. The box also says whether "Order missing" would still work (storage covers the rest); if it is blocked too, "Order missing" is grey as well. After mining or moving cargo, press **Check** to check again. Warnings that do not block an order are shown in a **Notes** box instead (for example crafters that are not working, by name).
 
 **Orders**: the progress of what you ordered. At the top: how many parts are finished, how many pieces are made of the total, a progress bar and a clock (running / finished in). Then one line per part, **oldest order first**: its number, a progress bar, "made / ordered" and a status:
 
@@ -129,9 +127,10 @@ When everything has arrived you get "Build: all ordered parts are done, the bloc
 | X: no conveyor link, not used / not counted | warning: a crafter or container is cut off | connect it, or ignore |
 | X is not progressing | no parts arrived for a minute and no crafter is working on it | check ore and sub-parts; **Stop orders** (in the Orders box) if it stays |
 | Not enough cargo space | the new parts weigh more than the free capacity of the storage | add or empty containers, or order fewer blocks |
+| Not working, not used: Assembler 5 m (2), … | note: these crafters are unfinished, damaged or have no power; the planner leaves them out (at most four names, "+N" for the rest) | finish, repair or power them, or ignore |
 
 ## 5. Settings
-Open them with the plugin's config button in Pulsar or with **Settings** in the planner window (the window closes; Ctrl+N brings it back). They are saved when you close the dialog and apply at once.
+Open them with the plugin's config button in Pulsar or with **Settings** in the planner window (the window closes; Ctrl+N brings it back). They are saved when you close the dialog and apply at once. The dialog follows the game's language like the window.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -151,11 +150,12 @@ The window, the notifications and the problem texts follow the game's language: 
 ## 6. Limits of this version
 - Progress counts parts arriving in storage. A mod that makes crafters output more than the recipe (for example a "4x faster" crafter mod) makes lines finish too early.
 - You cannot cancel parts that are already inside a crafter from the planner; remove them in the crafter's own screen.
-- The build list is saved for each world (in `AppData\LwBuildPlanner\Worlds` inside the game's data folder) and comes back when you load that world again. A new world keeps its list from its first save on.
+- The build list is saved **together with the world**: every time the game saves (Save, Save as, autosave, the save when you leave), the list is written to a small file for that save (in `AppData\LwBuildPlanner\Worlds` inside the game's data folder), and it comes back when you load that world. Changes after the last save are lost with the world: after **exit without saving** or a crash you get the list of the last save, the one that matches the world. An empty list leaves no file. **Save as** gives the new save its own list.
 - **Order all** checks storage again on every click, so ore you have just mined counts at once. If a problem is left, or orders are still running (the list stays after ordering, so a second Order all would make everything again), a notification says so and nothing is ordered. Use **Order missing** to add to running orders; it counts what is already on order. After an order click both order buttons wait a moment for the answer, so a quick second click does nothing.
-- The list stays while orders run, so it is still there after a restart. When all orders are done the ordered blocks leave it by themselves; **Empty list** clears it at any time.
-- Orders are not saved. After loading, the crafters finish what is already in their queues. Wait until they are done before you press **Order missing**: the planner does not see those old queues, so it would order those parts again.
+- The list stays while orders run, so after a load it is still there (as of the last save). When all orders are done the ordered blocks leave it by themselves; **Empty list** clears it at any time.
+- Orders are not saved. The game saves the crafters' queues, so after loading the crafters finish what is already in them. Wait until they are done before you press **Order missing**: the planner does not see those old queues, so it would order those parts again.
+- After a load (or a crash) a block can miss a part whose order was cut short. Add that block again in the G menu with **+** and press **Order missing**: only what is not in storage is made.
 - Orders go to the crafters of one grid: the one with the most crafters.
 - The planner leaves parts you queued by hand alone, with one exception from the game itself: if an idle crafter still holds a part you queued by hand (for example one stuck for lack of ore), and the planner queues the same part there, the game adds the planner's batch to your entry. Nothing is lost; the crafter makes both together.
-- When all orders are done the ordered blocks always leave the list. To build the same again, pick the blocks again (a "repeat" option may come later).
+- When all orders are done the ordered blocks leave the list, unless **Keep list when done** is on (section 5): then they stay and the same build can be ordered again.
 - The add key in the G menu needs Windows; the open key works everywhere (it uses the game's own input). Both can be changed in the settings.

@@ -25,6 +25,39 @@ internal static class CrafterApi
 
     public static bool IsCrafting(object converter) => Reflect.Get(Reflect.Member(converter.GetType(), "Crafting"), converter) is true;
 
+    private static MethodInfo producingMethod;
+    private static Type producingOwner;
+    private static bool producingWarned;
+
+    /// <summary>
+    /// Whether the crafter still has this recipe (with no requester, as the planner and the player queue it) in its
+    /// current job or its queue: ItemConverterComponent.IsProducingRecipeFor(recipe, requester), the game's own check,
+    /// which returns a value only while it is there. Null when the check is not available (then storage arrivals count).
+    /// </summary>
+    public static bool? IsProducing(object converter, object recipe)
+    {
+        try
+        {
+            var type = converter.GetType();
+            if (producingOwner != type)
+            {
+                producingOwner = type;
+                producingMethod = type.GetMethods(Any).FirstOrDefault(m => m.Name == "IsProducingRecipeFor" && m.GetParameters().Length == 2);
+            }
+            if (producingMethod == null) throw new MissingMethodException("ItemConverterComponent.IsProducingRecipeFor not found");
+            return producingMethod.Invoke(converter, new[] { recipe, null }) != null;
+        }
+        catch (Exception e)
+        {
+            if (!producingWarned)
+            {
+                producingWarned = true;
+                PluginLog.Warn("Crafter queue check not available, progress counts storage arrivals only: " + (e.InnerException ?? e).Message);
+            }
+            return null;
+        }
+    }
+
     public static bool Enqueue(object converter, object recipe, int batches) => Call(converter.GetType(), "TryEnqueueRecipe", converter, recipe, batches) is true;
 
     public static List<(ItemDefinition Item, double Amount)> Inputs(object recipe) => Amounts(Reflect.Get(Reflect.Member(recipe.GetType(), "Inputs"), recipe));

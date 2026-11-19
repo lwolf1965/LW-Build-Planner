@@ -54,6 +54,7 @@ internal sealed class PlanReport
             foreach (var item in store.Items.Keys) report.Items[Id(item)] = item;
 
         var facts = new PlanFacts { NonFunctionalCrafters = grid.NonFunctionalCrafters };
+        facts.NonFunctionalNames.AddRange(grid.NonFunctionalNames);
         var unlinkedBlocks = CheckConveyors(grid, wanted, facts);
 
         // Stock that the crafters can really reach: everything except storage with no conveyor link.

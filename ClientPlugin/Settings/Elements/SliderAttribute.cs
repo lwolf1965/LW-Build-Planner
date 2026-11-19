@@ -1,8 +1,11 @@
 // From CometWorks/client2-plugin-template (MIT, (c) 2026 Viktor Ferenczi), used unchanged unless noted.
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.VisualTree;
 
 namespace ClientPlugin.Settings.Elements;
 
@@ -51,9 +54,27 @@ internal class SliderAttribute : Attribute, IElement
                 setter((int)Math.Round(slider.Value));
             else
                 setter((float)slider.Value);
+            if (Type == SliderType.Integer) ShowWhole(slider);
         };
+        if (Type == SliderType.Integer) slider.Loaded += (_, _) => ShowWhole(slider);
 
         return RowBuilder.NewRow(Tools.Tools.GetLabelOrDefault(name, Label), Description, slider);
+    }
+
+    // LW Build Planner: the game's slider template shows the value with two decimals ("50.00"); whole-number settings
+    // show "50". The template's number text is found once loaded and given the whole number (a local value wins over
+    // the template's binding). Nothing found (other template): the template's text stays.
+    private static void ShowWhole(Slider slider)
+    {
+        try
+        {
+            var whole = ((int)Math.Round(slider.Value)).ToString(CultureInfo.CurrentCulture);
+            foreach (var text in slider.GetVisualDescendants().OfType<TextBlock>()
+                         .Where(t => double.TryParse(t.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
+                                     || double.TryParse(t.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out _)))
+                text.Text = whole;
+        }
+        catch (Exception) { /* only the look */ }
     }
 
     public List<Type> SupportedTypes { get; } = new() { typeof(int), typeof(float), typeof(double) };

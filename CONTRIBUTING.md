@@ -33,7 +33,7 @@ Rules the code follows:
   are left alone.
 - **Limits are on blocks** in the build list, not on parts.
 - **No network access.** The plugin writes only the build list of each world (`PlanSave`, under the game's data
-  folder, file name sanitized by `PlanFile.FileName`) and its settings (`Config.xml` in the plugin's Pulsar data
+  folder, file name sanitized by `PlanFile.FileName`, written and removed only at a world save) and its settings (`Config.xml` in the plugin's Pulsar data
   folder). Any other file access needs a good reason and an update of [SECURITY.md](SECURITY.md).
 
 Before you open the pull request:

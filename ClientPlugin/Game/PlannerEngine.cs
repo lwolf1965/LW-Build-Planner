@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Keen.Game2.Client.GameSystems.PlayerControl;
+using Keen.Game2.Client.UI.InGame;
 using Keen.Game2.Game.SessionComponents;
 using Keen.Game2.Simulation.GameSystems.Ownership;
 using Keen.Game2.Simulation.RuntimeSystems.CoreScenes;
@@ -36,7 +37,7 @@ internal static class PlannerEngine
     /// <summary>Build list, check result and orders belong to one world: a new session starts them empty.</summary>
     private static void ForgetWorld(WorldSessionComponent world)
     {
-        PlanSave.Detach(); // nothing of the old world is written into the new world's file
+        PlanSave.Detach(); // the old world's list is never written into the new world's file
         HudNotify.Forget(); // the old world's HUD is gone; the new one is remembered when a terminal opens
         OrderBook.ForgetWorld();
         GameLanguage.Refresh(); // messages of this world in the game's language
@@ -56,13 +57,12 @@ internal static class PlannerEngine
             var world = scene?.GameServer?.TryGet<WorldSessionComponent>();
             if (world == null || !ReferenceEquals(world.OwnedSession, session) || session.IsUnloading) return;
 
-            CrafterWatch.Saving(world.IsSaving); // save / load test: logs only when the flag changes
             var client = scene.GameClient?.TryGet<WorldSessionComponent>();
             if (client == null || world.Pause.IsPaused || client.Pause.IsPaused || world.IsSaving) return;
 
             // Idle frames (nothing queued, session already seen) stop here, before the player lookup.
             var probed = Probed.TryGetValue(session, out _);
-            if (probed && Pending.IsEmpty && !OrderBook.TickDue && !CrafterWatch.Due) return;
+            if (probed && Pending.IsEmpty && !OrderBook.TickDue) return;
 
             var players = client.OwnedSession?.SessionComponents?.TryGet<ClientPlayersSessionComponent>();
             if (players == null || !players.LocalPlayerIdentity.IsValid()) return;
@@ -75,13 +75,14 @@ internal static class PlannerEngine
             {
                 Probed.Add(session, new object()); // from now on idle frames stop early (see above)
                 ForgetWorld(world); // a world was loaded: nothing of the previous one may stay
-                CrafterWatch.NewWorld();
-            }
-
-            if (CrafterWatch.Due)
-            {
-                try { CrafterWatch.Look(context); }
-                catch (Exception e) { PluginLog.Error("Crafter watch failed: " + e); }
+                // The HUD notifications go through the client session's in-game UI (the same object a terminal screen
+                // gets as _inGameUI, it implements InGameUI). Taken here at world load, messages show from the start,
+                // not only after the first terminal was opened (found 2026-11-19).
+                var hud = client.OwnedSession?.SessionComponents?.TryGet<SessionInGameUISessionComponent>();
+                HudNotify.Remember(hud);
+                PluginLog.Info(hud != null
+                    ? "HUD: in-game UI found at world load, notifications show without a terminal."
+                    : "HUD: in-game UI not found at world load, notifications show after the first terminal.");
             }
 
             if (OrderBook.TickDue)
