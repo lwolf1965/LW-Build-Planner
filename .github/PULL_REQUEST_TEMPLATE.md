@@ -14,6 +14,6 @@
 - [ ] New decisions are in `ClientPlugin/Policy/` and have a test
 - [ ] The world is touched only through `PlannerEngine.Enqueue`
 - [ ] Nothing the player queued by hand is changed
-- [ ] No network or file access was added
+- [ ] No network access was added; no file access besides the per-world build list (see SECURITY.md)
 - [ ] Version number and `LwBuildPlanner.xml` are unchanged
 - [ ] `Docs/UserManual.md` is updated if players see the change

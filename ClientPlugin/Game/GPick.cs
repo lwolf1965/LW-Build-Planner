@@ -54,8 +54,8 @@ internal static class GPick
             var viewModelType = terminalViewModel.GetType();
             if (uiFieldOwner != viewModelType) { uiFieldOwner = viewModelType; uiField = Reflect.Field(viewModelType, "_inGameUI"); }
             var ui = Reflect.Get(uiField, terminalViewModel);
-            for (var shown = 0; shown < 3 && PlanStore.Messages.TryDequeue(out var message); shown++)
-                HudNotify.Show(ui, message);
+            HudNotify.Remember(ui); // also used while no terminal is open (HudNotify.PostDrain)
+            HudNotify.Drain(ui);
             BlueprintRead.Poll(terminalViewModel); // a blueprint being read is picked up when it is ready; remembers the Blueprints tab
 
             if (keysUnavailable || !GameHasFocus()) return;

@@ -26,7 +26,9 @@ internal static class RawTexts
         return LocKey.FromString(text);
     }
 
-    public static bool IsOurs(StringId id) => !Known.IsEmpty && Known.ContainsKey(id);
+    // ContainsKey only: it takes no lock and is false for an empty dictionary. (IsEmpty took every lock of the dictionary
+    // while it was empty, on every localized text lookup of the game; hub review of PR #41, 2026-11-19.)
+    public static bool IsOurs(StringId id) => Known.ContainsKey(id);
 }
 
 /// <summary>Looking up one of our texts returns the text itself (escaped, so the game's {filter} parser leaves it alone).</summary>

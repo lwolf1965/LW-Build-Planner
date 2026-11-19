@@ -12,14 +12,17 @@ public class Plugin : IPlugin
 {
     public const string Name = "LwBuildPlanner";
     /// <summary>Plugin version, the only place to change it (AssemblyInfo.cs uses it). STAGE.FEATURE.FIX.BUILD, 0.1 = game alpha.</summary>
-    public const string Version = "0.1.0.1";
+    public const string Version = "0.1.1.0";
     public static Plugin Instance;
 
     // Injected by Pulsar (same mechanism as LW Cargo Manager).
 #pragma warning disable CS0649
     private static Func<string, string, string> GetConfigPath;
 #pragma warning restore CS0649
-    public string DataDir { get; private set; } = GetConfigPath(Name, null);
+    // Pulsar's data folder for this plugin, asked for only when something uses it: asking creates the folder, and this
+    // version stores nothing there (hub review of PR #41, 2026-11-19). The settings of the next version use it.
+    private string dataDir;
+    public string DataDir => dataDir ??= GetConfigPath(Name, null);
 
     public Plugin()
     {

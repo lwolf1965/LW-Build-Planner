@@ -62,9 +62,6 @@ nunit-*.xml
 # Visual Studio cache
 .vs/
 
-# Built plugin DLL kept on purpose (dotnet build -c Release)
-!/Release/
-
 # Working material that stays out of the repository
 # Probe outputs and game logs copied into Docs/ for analysis (the findings live in the notes, not in git)
 /Docs/probe*.txt
