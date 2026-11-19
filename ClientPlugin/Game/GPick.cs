@@ -39,6 +39,8 @@ internal static class GPick
     /// <summary>True while a terminal / G menu screen exists (its hook ran in the last 0.3 s).</summary>
     internal static bool TerminalOpen => Environment.TickCount64 - System.Threading.Volatile.Read(ref lastTerminalTick) < 300;
     private static long lastTerminalTick;
+    // The last pick written to the log: the same block picked again (+ pressed several times) is not logged again.
+    private static object lastPickLogged;
 
     public static void OnTerminalUpdate(object terminalViewModel)
     {
@@ -225,8 +227,12 @@ internal static class GPick
             var composite = Value(tile, "Block");
             var block = CubeOf(composite);
             if (block == null) continue;
-            PluginLog.Info($"Pick from {member}: {Describe(tile)}, {composite}; cost "
-                           + (block.Items.IsDefaultOrEmpty ? "none" : string.Join(", ", block.Items.Select(a => $"{Fx.ToDouble(a.Amount)} x {OrderJob.NameOf(a.Item)}"))));
+            if (!ReferenceEquals(composite ?? block, lastPickLogged))
+            {
+                lastPickLogged = composite ?? block;
+                PluginLog.Info($"Pick from {member}: {Describe(tile)}, {composite}; cost "
+                               + (block.Items.IsDefaultOrEmpty ? "none" : string.Join(", ", block.Items.Select(a => $"{Fx.ToDouble(a.Amount)} x {OrderJob.NameOf(a.Item)}"))));
+            }
 
             var name = Text(Value(kind, "Name"));
             if (string.IsNullOrWhiteSpace(name)) name = Text(Value(tile, "Name"));

@@ -70,6 +70,12 @@ internal static class OrderBook
     private static readonly Dictionary<string, double> LastProgress = new();
     /// <summary>When "Order progress" was last logged per part: at most every 30 s, plus the last arrival.</summary>
     private static readonly Dictionary<string, double> ProgressLogged = new();
+    /// <summary>
+    /// Batches queued per part since its last "Queued" log line: the log says it at the first batch, then at most once a
+    /// minute and at the last batch (a 412-block order wrote 552 lines, one per batch, 2026-11-19).
+    /// </summary>
+    private static readonly Dictionary<string, (int Batches, long Crafts, HashSet<int> Crafters)> QueuedSince = new();
+    private static readonly Dictionary<string, double> QueuedLogged = new();
     /// <summary>No arrivals and no crafter working on a part for this long: "no progress" (settings, default 60 s).</summary>
     public static double StuckSeconds => PlannerSettings.Current.NoProgressSeconds;
     private static readonly Dictionary<string, string> Notes = new();
@@ -135,7 +141,7 @@ internal static class OrderBook
             Reset();
             return;
         }
-        if (Process(scan, grids.Values)) PlanService.Check(context, OrderMode.None); // the list changed: refresh the view
+        if (Process(scan, grids.Values)) PlanService.Check(context, OrderMode.None, quiet: true); // the list changed: refresh the view
     }
 
     /// <summary>Stops queueing; what is already in the crafters keeps running.</summary>
@@ -157,6 +163,8 @@ internal static class OrderBook
         LastStock.Clear();
         LastProgress.Clear();
         ProgressLogged.Clear();
+        QueuedSince.Clear();
+        QueuedLogged.Clear();
         Told.Clear();
         wasActive = false;
         startedAt = finishedAt = -1;
@@ -296,8 +304,15 @@ internal static class OrderBook
             var maker = byId[job.Crafter];
             var want = wants.First(w => w.Item == job.Item);
             var ok = OrderJob.DryRun || CrafterApi.Enqueue(maker.Converter, recipes[(job.Crafter, job.Item)], job.Crafts);
-            PluginLog.Info($"{(OrderJob.DryRun ? "DRY RUN: would queue" : "Queued")} batch of {job.Crafts} x {NameOf(job.Item)} in '{maker.Name}' ({(ok ? "ok" : "refused")}), {Ledger.Waiting.GetValueOrDefault(job.Item)} waiting");
-            if (!ok) { Notes[job.Item] = Tr.T("note.refused", maker.Name); continue; }
+            if (!ok)
+            {
+                PluginLog.Info($"Batch of {job.Crafts} x {NameOf(job.Item)} refused by '{maker.Name}', {Ledger.Waiting.GetValueOrDefault(job.Item)} waiting");
+                Notes[job.Item] = Tr.T("note.refused", maker.Name);
+                continue;
+            }
+            if (!QueuedSince.TryGetValue(job.Item, out var since)) since = (0, 0, new HashSet<int>());
+            since.Crafters.Add(job.Crafter);
+            QueuedSince[job.Item] = (since.Batches + 1, since.Crafts + job.Crafts, since.Crafters);
             Ledger.MarkQueued(job.Crafter, job.Item, (long)Math.Ceiling(job.Crafts * want.PerCraft));
             IdleSince.Remove(job.Crafter);
             LastProgress[job.Item] = now;
@@ -310,6 +325,20 @@ internal static class OrderBook
                     if (store.Items.TryGetValue(item, out var amount)) stock += (long)Math.Floor(amount);
                 LastStock[job.Item] = stock;
             }
+        }
+
+        // The "Queued" log line per part: the first batch, then at most once a minute, and the last batch.
+        foreach (var itemId in QueuedSince.Keys.ToList())
+        {
+            var first = !QueuedLogged.TryGetValue(itemId, out var loggedAt);
+            var waitingNow = Ledger.Waiting.GetValueOrDefault(itemId);
+            if (!first && waitingNow > 0 && now - loggedAt < 60) continue;
+            var (batches, crafts, crafters) = QueuedSince[itemId];
+            PluginLog.Info($"{(OrderJob.DryRun ? "DRY RUN: would queue" : "Queued")} {batches} batch(es), {crafts} craft(s) of {NameOf(itemId)} in "
+                           + string.Join(", ", crafters.Select(id => CrafterNames.TryGetValue(id, out var n) ? n : "?").GroupBy(n => n).OrderBy(g => g.Key)
+                               .Select(g => g.Count() > 1 ? $"'{g.Key}' x{g.Count()}" : $"'{g.Key}'")) + $", {waitingNow} waiting");
+            QueuedLogged[itemId] = now;
+            QueuedSince.Remove(itemId);
         }
 
         // Parts that got no crafter this pass: say why (once), and keep them from looking stuck.

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using ClientPlugin.Policy;
 using Keen.Game2.Simulation.WorldObjects.CubeGrids;
 using Keen.Game2.Simulation.WorldObjects.Items;
@@ -69,6 +70,23 @@ internal static class PlanService
     /// <summary>Last check, for the screen. Null before the first check.</summary>
     public static volatile PlanView LastView;
 
+    private static int refreshQueued;
+
+    /// <summary>
+    /// The list changed (any thread): the window's check follows it. Quick changes (clicks on [-] / [+]) give one check,
+    /// not one each: while a re-check waits in the queue no other is added, and it reads the list when it runs.
+    /// Logged in one line (the full check is logged for the Check button, the window opening and every order).
+    /// </summary>
+    public static void Refresh()
+    {
+        if (Interlocked.Exchange(ref refreshQueued, 1) == 1) return;
+        PlannerEngine.Enqueue(c =>
+        {
+            Interlocked.Exchange(ref refreshQueued, 0);
+            Check(c, OrderMode.None, quiet: true);
+        });
+    }
+
     /// <summary>The parts the given lines need (block cost x count).</summary>
     private static Dictionary<ItemDefinition, long> Wanted(IEnumerable<PlannedEntry> lines)
     {
@@ -106,8 +124,14 @@ internal static class PlanService
             result.Errors.Add(Tr.T("hud.noCrafterAny"));
             return result;
         }
-        var report = PlanReport.Build(grid, wanted, OrderBook.LedgerForCheck, OrderBook.ItemsForCheck,
-            grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: true);
+        PlanReport.LogDetails = false; // the summary line below says what matters
+        PlanReport report;
+        try
+        {
+            report = PlanReport.Build(grid, wanted, OrderBook.LedgerForCheck, OrderBook.ItemsForCheck,
+                grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: true);
+        }
+        finally { PlanReport.LogDetails = true; }
         result.CanBuild = report.CanBuild;
         var full = RecipeTree.Resolve(report.Wanted, new Dictionary<string, long>(), report.Recipes);
         foreach (var raw in full.RawShortage.Where(r => r.Value > 0).OrderByDescending(r => r.Value))
@@ -117,8 +141,14 @@ internal static class PlanService
         try
         {
             // "Order all": every part made new, storage used only as raw material (the window's "Problems for 'Order all'").
-            var all = PlanReport.Build(grid, wanted, OrderBook.LedgerForCheck, OrderBook.ItemsForCheck,
-                grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: false);
+            PlanReport.LogDetails = false;
+            PlanReport all;
+            try
+            {
+                all = PlanReport.Build(grid, wanted, OrderBook.LedgerForCheck, OrderBook.ItemsForCheck,
+                    grids.Values.Where(g => !ReferenceEquals(g, grid)).ToList(), onlyMissing: false);
+            }
+            finally { PlanReport.LogDetails = true; }
             foreach (var raw in all.Tree.RawShortage.Where(r => r.Value > 0 && all.IsOre(r.Key)).OrderByDescending(r => r.Value))
                 result.AllShort.Add((all.NameOf(raw.Key), raw.Value));
         }
@@ -137,8 +167,10 @@ internal static class PlanService
     /// Build Planner box in the Blueprint Details screen does.
     /// </summary>
     private static void NoteMissing(PlanView view, GridStock grid, Dictionary<CubeGridComponent, GridStock> grids,
-        Dictionary<ItemDefinition, long> wanted, OrderLedger ledger)
+        Dictionary<ItemDefinition, long> wanted, OrderLedger ledger, bool quiet)
     {
+        var details = PlanReport.LogDetails;
+        PlanReport.LogDetails = false; // same stock as the main check, already logged
         try
         {
             var missing = PlanReport.Build(grid, wanted, ledger, OrderBook.ItemsForCheck,
@@ -148,12 +180,24 @@ internal static class PlanService
             view.MissingNote = missing.Need.Count == 0 ? Tr.T("problems.missingNone")
                 : missing.CanBuild ? Tr.T("problems.missingOk", missing.Need.Count)
                 : Tr.T("problems.missingBlocked", firstError ?? "?");
-            PluginLog.Info("Plan check (Missing, for the window): " + view.MissingNote);
+            if (!quiet) PluginLog.Info("Plan check (Missing, for the window): " + view.MissingNote);
         }
         catch (Exception e) { PluginLog.Warn("Plan check: the 'Order missing' note failed: " + e.Message); }
+        finally { PlanReport.LogDetails = details; }
     }
 
-    public static void Check(PlannerContext context, OrderMode mode)
+    /// <summary>
+    /// Counts, shows and (mode All / Missing) orders. Quiet (re-check after a list change, see Refresh): the log gets one
+    /// line instead of the stock, cargo, part and alert lines.
+    /// </summary>
+    public static void Check(PlannerContext context, OrderMode mode, bool quiet = false)
+    {
+        PlanReport.LogDetails = !quiet;
+        try { CheckLogged(context, mode, quiet); }
+        finally { PlanReport.LogDetails = true; }
+    }
+
+    private static void CheckLogged(PlannerContext context, OrderMode mode, bool quiet)
     {
         var plan = PlanStore.Snapshot();
         var wanted = Wanted(plan);
@@ -182,13 +226,19 @@ internal static class PlanService
                 Missing = ledger.Missing(want.Key, want.Value, stock),
             });
         }
-        if (mode == OrderMode.None && !report.CanBuild && plan.Count > 0) NoteMissing(view, grid, grids, wanted, ledger);
+        if (mode == OrderMode.None && !report.CanBuild && plan.Count > 0) NoteMissing(view, grid, grids, wanted, ledger, quiet);
         LastView = view;
 
-        PluginLog.Info($"Plan check ({mode}): {plan.Count} list line(s), can build = {report.CanBuild}, "
-                       + string.Join(", ", view.Parts.Select(p => $"{p.Item} need {p.Need} storage {p.Stock} on order {p.Incoming} missing {p.Missing}")));
-        foreach (var alert in report.Alerts)
-            PluginLog.Info($"Plan alert ({alert.Level}): {alert.Text}");
+        if (quiet)
+            PluginLog.Info($"Plan check (list changed): {plan.Count} list line(s), {plan.Sum(p => p.Count)} block(s), can build = {report.CanBuild}, "
+                           + $"{view.Parts.Count} part(s), {report.Alerts.Count(a => a.Level == AlertLevel.Error)} error(s), {report.Alerts.Count(a => a.Level == AlertLevel.Warning)} warning(s)");
+        else
+        {
+            PluginLog.Info($"Plan check ({mode}): {plan.Count} list line(s), can build = {report.CanBuild}, "
+                           + string.Join(", ", view.Parts.Select(p => $"{p.Item} need {p.Need} storage {p.Stock} on order {p.Incoming} missing {p.Missing}")));
+            foreach (var alert in report.Alerts)
+                PluginLog.Info($"Plan alert ({alert.Level}): {alert.Text}");
+        }
         if (mode == OrderMode.None) return;
 
         if (plan.Count == 0)

@@ -449,5 +449,111 @@ Check(Names("bp.allShort", "btn.orderAll"), "texts: the blueprint box's 'Order a
 var confirmTip = "set:Empty list and Stop orders need a second click.";
 Check(Tr.Row(confirmTip) != null && Names(confirmTip, "btn.clearList") && Names(confirmTip, "btn.stopOrders"), "settings: the 'Confirm clearing' tip names the real buttons in every language");
 
+// M3: whole blocks (Policy/BlockSets.cs). Recipes: Plate 10 iron, Motor 5 iron + 2 nickel, Pipe 3 iron.
+var m3Recipes = new Dictionary<string, Recipe>
+{
+    ["Plate"] = new Recipe { Item = "Plate", Machine = "Assembler", Inputs = new Dictionary<string, int> { ["OreIron"] = 10 } },
+    ["Motor"] = new Recipe { Item = "Motor", Machine = "Assembler", Inputs = new Dictionary<string, int> { ["OreIron"] = 5, ["OreNickel"] = 2 } },
+    ["Pipe"] = new Recipe { Item = "Pipe", Machine = "Assembler", Inputs = new Dictionary<string, int> { ["OreIron"] = 3 } },
+};
+BlockLine BL(string key, int count, double complexity, params (string, long)[] parts)
+    => new() { Key = key, Name = key, Count = count, Complexity = complexity, Parts = parts.ToDictionary(p => p.Item1, p => p.Item2) };
+var m3Lines = new List<BlockLine>
+{
+    BL("Thruster", 3, 100, ("Plate", 20), ("Motor", 2)),
+    BL("Tank", 2, 50, ("Plate", 10), ("Pipe", 4)),
+    BL("Cube", 10, 1, ("Plate", 1)),
+};
+var m3Avail = new Dictionary<string, long> { ["Plate"] = 50, ["Motor"] = 4 };
+var m3Ore = new Dictionary<string, long> { ["OreIron"] = 400, ["OreNickel"] = 10 };
+var m3 = BlockSets.Plan(m3Lines, m3Avail, m3Ore, m3Recipes, Ore, onlyMissing: true, null);
+Check(m3.FromStock.GetValueOrDefault("Thruster") == 2 && m3.FromStock.GetValueOrDefault("Cube") == 10 && !m3.FromStock.ContainsKey("Tank"),
+    "M3 storage: covers whole blocks, most complex first (2 Thrusters take 40 Plate + 4 Motor, the last 10 Plate cover 10 Cubes)");
+Check(m3.StockUsed["Plate"] == 50 && m3.StockUsed["Motor"] == 4, "M3 storage: the parts it used");
+Check(m3.Craft.Count == 1 && m3.Craft[0].Key == "Tank" && m3.Craft[0].Count == 2,
+    "M3 ore: 2 Tanks fit 400 iron (224), the third Thruster would need 434: smallest block first, only what fits");
+Check(m3.Waiting.GetValueOrDefault("Thruster") == 1 && m3.WaitShortage.GetValueOrDefault("OreIron") == 34 && !m3.WaitShortage.ContainsKey("OreNickel"),
+    "M3 ore: the Thruster waits; 34 more iron would make every block");
+Check(m3.Make["Plate"] == 20 && m3.Make["Pipe"] == 8 && !m3.Make.ContainsKey("Motor") && m3.Credit.Count == 0, "M3 make: the parts of the 2 Tanks");
+Check(m3.StockBlocks == 12 && m3.CraftBlocks == 2 && m3.WaitingBlocks == 1, "M3: 12 from storage + 2 made + 1 waiting = the 15 blocks");
+
+var m3All = BlockSets.Plan(m3Lines, m3Avail, m3Ore, m3Recipes, Ore, onlyMissing: false, null);
+Check(m3All.FromStock.Count == 0 && m3All.Waiting.Count == 0 && m3All.Craft.Select(g => g.Key).SequenceEqual(new[] { "Cube", "Tank", "Thruster" }),
+    "M3 Order all: every block made new, smallest first (Cube 1 part, Tank 14, Thruster 22)");
+Check(m3All.Make["Plate"] == 90 && m3All.Make["Motor"] == 6 && m3All.Make["Pipe"] == 8, "M3 Order all: all parts of all blocks");
+
+var m3Partial = BlockSets.Plan(new List<BlockLine> { BL("Tank", 3, 50, ("Plate", 10), ("Pipe", 4)) },
+    new Dictionary<string, long> { ["Plate"] = 15, ["Pipe"] = 2 }, new Dictionary<string, long> { ["OreIron"] = 10000 }, m3Recipes, Ore, true, null);
+Check(m3Partial.FromStock.Count == 0 && m3Partial.Credit["Plate"] == 15 && m3Partial.Credit["Pipe"] == 2
+      && m3Partial.Make["Plate"] == 15 && m3Partial.Make["Pipe"] == 10, "M3 storage that covers no whole block is used for the made blocks (credit), the rest is made");
+
+var m3Armor = BlockSets.Plan(new List<BlockLine> { BL("Cube", 1000, 1, ("Plate", 1)) },
+    new Dictionary<string, long>(), new Dictionary<string, long> { ["OreIron"] = 255 }, m3Recipes, Ore, true, null);
+Check(m3Armor.CraftBlocks == 25 && m3Armor.Waiting["Cube"] == 975 && m3Armor.WaitShortage["OreIron"] == 9745, "M3 ore: 1,000 cubes, iron for 25: 25 made, 975 wait (binary search)");
+
+var m3Nickel = BlockSets.Plan(new List<BlockLine> { BL("Motorblock", 2, 10, ("Motor", 5)), BL("Plateblock", 2, 10, ("Plate", 6)) },
+    new Dictionary<string, long>(), new Dictionary<string, long> { ["OreIron"] = 1000, ["OreNickel"] = 0 }, m3Recipes, Ore, true, null);
+Check(m3Nickel.Waiting["Motorblock"] == 2 && m3Nickel.Craft.Single().Key == "Plateblock" && m3Nickel.Craft[0].Count == 2,
+    "M3 ore: a block that lacks one ore waits, a later block with other ore is still made");
+
+var m3Groups = new List<BlockGroup>
+{
+    new() { Key = "Tank", Count = 2, Parts = new Dictionary<string, long> { ["Plate"] = 10, ["Pipe"] = 4 } },
+    new() { Key = "Thruster", Count = 1, Parts = new Dictionary<string, long> { ["Plate"] = 20, ["Motor"] = 2 } },
+};
+Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 15, ["Pipe"] = 8 }).SequenceEqual(new[] { 1, 0 }),
+    "M3 done: 15 Plate + 8 Pipe handed out = the first Tank only");
+Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 40, ["Pipe"] = 8 }).SequenceEqual(new[] { 2, 0 }),
+    "M3 done: the Thruster waits for its Motors although its Plate is out");
+Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 40, ["Pipe"] = 8, ["Motor"] = 2 }).SequenceEqual(new[] { 2, 1 }),
+    "M3 done: all parts out = all blocks done");
+Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 100, ["Motor"] = 2 }).SequenceEqual(new[] { 0, 0 }),
+    "M3 done: in hand-out order: the Thruster is not done before the Tanks");
+Check(BlockSets.PartOrder(m3Groups, new Dictionary<string, long> { ["Plate"] = 15, ["Pipe"] = 8 }).SequenceEqual(new[] { "Plate", "Motor" }),
+    "M3 hand-out: Plate first (the 2nd Tank lacks it), then Motor (the Thruster); Pipe is all out");
+Check(BlockSets.PartOrder(m3Groups, new Dictionary<string, long>()).SequenceEqual(new[] { "Pipe", "Plate", "Motor" }),
+    "M3 hand-out: nothing out yet: the first block's parts first");
+
+// M3 blueprints: all or nothing (Lone 2026-11-19), unless the player says "build anyway".
+BlockLine M3PL(string key, string project, int count, params (string, long)[] parts)
+{
+    var line = BL(key, count, 10, parts);
+    line.Project = project;
+    return line;
+}
+var m3BpLines = new List<BlockLine>
+{
+    BL("Cube", 5, 1, ("Plate", 1)),
+    M3PL("ShipThruster", "Ship", 2, ("Plate", 20), ("Motor", 2)),
+    M3PL("ShipTank", "Ship", 1, ("Plate", 10), ("Pipe", 4)),
+};
+var m3BpOre = new Dictionary<string, long> { ["OreIron"] = 300, ["OreNickel"] = 100 };
+var m3BpHeld = BlockSets.Plan(m3BpLines, new Dictionary<string, long>(), m3BpOre, m3Recipes, Ore, true, null);
+Check(m3BpHeld.Craft.Count == 1 && m3BpHeld.Craft[0].Key == "Cube" && m3BpHeld.Craft[0].Count == 5,
+    "M3 blueprint short of ore: none of its blocks is made (its Tank would fit), the hand-added Cubes are");
+Check(m3BpHeld.Waiting["ShipThruster"] == 2 && m3BpHeld.Waiting["ShipTank"] == 1 && m3BpHeld.ProjectWaiting["Ship"]["OreIron"] == 282
+      && !m3BpHeld.ProjectWaiting["Ship"].ContainsKey("OreNickel"), "M3 blueprint short of ore: it waits whole and lacks 282 iron (582 for Cubes + Ship, 300 there)");
+var m3BpForced = BlockSets.Plan(m3BpLines, new Dictionary<string, long>(), m3BpOre, m3Recipes, Ore, true, new[] { "Ship" });
+Check(m3BpForced.Craft.Select(g => g.Key).SequenceEqual(new[] { "Cube", "ShipTank" }) && m3BpForced.Waiting["ShipThruster"] == 2 && m3BpForced.ProjectWaiting.Count == 0,
+    "M3 build anyway: the blueprint's blocks that fit are made, the rest waits in the list");
+var m3BpRich = BlockSets.Plan(m3BpLines, new Dictionary<string, long>(), new Dictionary<string, long> { ["OreIron"] = 1000, ["OreNickel"] = 100 }, m3Recipes, Ore, true, null);
+Check(m3BpRich.CraftBlocks == 8 && m3BpRich.Waiting.Count == 0 && m3BpRich.ProjectWaiting.Count == 0, "M3 blueprint with enough ore: all made");
+var m3BpStock = BlockSets.Plan(m3BpLines, new Dictionary<string, long> { ["Plate"] = 10, ["Pipe"] = 4 }, m3BpOre, m3Recipes, Ore, true, null);
+Check(!m3BpStock.FromStock.ContainsKey("ShipTank") && m3BpStock.Waiting["ShipTank"] == 1,
+    "M3 blueprint short of ore: storage does not take its blocks off the list either (it stays whole)");
+
+var m3Ledger = new OrderLedger();
+m3Ledger.Commit(new Dictionary<string, long> { ["Plate"] = 20 });
+m3Ledger.Reserve(new Dictionary<string, long> { ["Plate"] = 50 }); // 30 in storage (covered blocks) + the 20 on order
+Check(m3Ledger.Available("Plate", 30) == 0 && m3Ledger.Missing("Plate", 10, 30) == 10,
+    "M3 kept parts: blocks off the list keep their parts; the list does not count them again");
+Check(m3Ledger.Available("Plate", 45) == 15, "M3 kept parts: more in storage than kept = the rest is free for the list");
+m3Ledger.ClampReserved(new Dictionary<string, long> { ["Plate"] = 5 }); // 25 welded
+Check(m3Ledger.Reserved["Plate"] == 25 && m3Ledger.Available("Plate", 5) == 0, "M3 kept parts: welded parts leave storage, the kept count follows (5 stored + 20 coming)");
+m3Ledger.Clear();
+Check(m3Ledger.Reserved["Plate"] == 25, "M3 kept parts: stopping the orders keeps them (the blocks stay off the list)");
+m3Ledger.ClampReserved(new Dictionary<string, long>());
+Check(!m3Ledger.Reserved.ContainsKey("Plate"), "M3 kept parts: all used = nothing kept");
+
 Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
 return fails == 0 ? 0 : 1;

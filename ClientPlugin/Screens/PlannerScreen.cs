@@ -131,7 +131,7 @@ internal class PlannerScreen : ScreenView
             {
                 // A new list starts clean: finished orders of the old list go too. Running orders stay (stop them in their box).
                 if (!OrderBook.LedgerForCheck.Active) OrderBook.Reset();
-                PlanService.Check(c, OrderMode.None);
+                PlanService.Check(c, OrderMode.None, quiet: true);
             });
         });
         buttons.Children.Add(clearList);
@@ -330,7 +330,7 @@ internal class PlannerScreen : ScreenView
                         if (Confirmed("project"))
                         {
                             PlanStore.RemoveProject();
-                            PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None));
+                            PlanService.Refresh();
                         }
                         lastDrawn = null;
                         Dispatcher.UIThread.Post(Redraw, DispatcherPriority.Background); // rebuilt after its click, not inside it
@@ -509,7 +509,7 @@ internal class PlannerScreen : ScreenView
                     var (shift, ctrl, alt) = GPick.Modifiers();
                     PlanStore.Change(entry.Key, sign * PlanLimits.Step(entry.Armor, shift, ctrl, alt));
                 }
-                PlannerEngine.Enqueue(c => PlanService.Check(c, OrderMode.None)); // the checks follow the new list
+                PlanService.Refresh(); // the checks follow the new list (quick clicks: one check)
                 lastDrawn = null;
                 Dispatcher.UIThread.Post(Redraw, DispatcherPriority.Background); // the row is rebuilt after its click, not inside it
             }

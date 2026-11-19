@@ -13,6 +13,12 @@ namespace ClientPlugin.Game;
 /// </summary>
 internal sealed class PlanReport
 {
+    /// <summary>
+    /// Log the stock, cargo space and conveyor lines of each check (game thread only). Off for the quiet re-checks
+    /// after a list change and for the extra variants of a check, so the log keeps one block per real check.
+    /// </summary>
+    public static bool LogDetails = true;
+
     public GridStock Grid;
     public TreeResult Tree;
     /// <summary>The recipes read for this report (items the grid's crafters can make, down to raw materials).</summary>
@@ -96,7 +102,7 @@ internal sealed class PlanReport
                 }
             }
         }
-        PluginLog.Info($"Stock: {grid.Stores.Count} inventories on the crafters' grid ({unlinkedBlocks.Count} blocks not linked), {remoteStorages} linked storage(s) on other grids, {grid.Makers.Count} crafter(s): "
+        if (LogDetails) PluginLog.Info($"Stock: {grid.Stores.Count} inventories on the crafters' grid ({unlinkedBlocks.Count} blocks not linked), {remoteStorages} linked storage(s) on other grids, {grid.Makers.Count} crafter(s): "
                        + string.Join(", ", grid.Makers.Select(m => $"{m.Name} [{m.Machine}]")));
 
         var incoming = ledger.IncomingAll();
@@ -154,7 +160,7 @@ internal sealed class PlanReport
         var check = CargoLimit.Check(masses, report.Need, incoming, PerPiece, report.NameOf);
         if (check == null) return null;
 
-        PluginLog.Info($"Cargo space: {check.Storages} storage inventories, free {check.Free:N0}, stored {check.Stored:N0} (items add up to {check.Calc:N0}, scale {check.Scale:0.###}); "
+        if (LogDetails) PluginLog.Info($"Cargo space: {check.Storages} storage inventories, free {check.Free:N0}, stored {check.Stored:N0} (items add up to {check.Calc:N0}, scale {check.Scale:0.###}); "
                        + string.Join(", ", report.Need.Take(6).Select(n => $"{report.NameOf(n.Key)} {n.Value:N0} x {PerPiece(n.Key) * check.Scale:0.##}")));
         return check.Alert;
     }
@@ -209,7 +215,7 @@ internal sealed class PlanReport
             unlinked.Add(entityOf[id]);
             if (machineOf[id] == null) facts.UnlinkedStorages.Add(name);
             else facts.UnlinkedCrafters.Add((name, machineOf[id]));
-            PluginLog.Warn($"Conveyor check: '{name}' is not linked to the main conveyor network (probe item {OrderJob.NameOf(probe)})");
+            if (LogDetails) PluginLog.Warn($"Conveyor check: '{name}' is not linked to the main conveyor network (probe item {OrderJob.NameOf(probe)})");
         }
         foreach (var maker in grid.Makers)
             maker.Linked = !unlinked.Contains(maker.Entity);
