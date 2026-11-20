@@ -14,6 +14,18 @@ public sealed class Recipe
     public int OutAmount = 1;
     public string Machine;
     public IReadOnlyDictionary<string, int> Inputs;
+    /// <summary>Crafters on the grid that make the item with this recipe.</summary>
+    public int Crafters = 1;
+    /// <summary>
+    /// Other recipes for the same item on other crafters (another kind of crafter, other inputs). The game spreads a
+    /// request for a part evenly over every connected crafter that can make it, each with its own recipe
+    /// (ItemConverterComponent.UpdateRequestsInAvailableConverters), so the tree splits the amount the same way.
+    /// Found 2026-11-20: a Combustion Chamber stalled for titanium the check never counted (one recipe per part).
+    /// </summary>
+    public List<Recipe> Alternatives = new();
+
+    /// <summary>This recipe and its alternatives.</summary>
+    public IEnumerable<Recipe> Variants => new[] { this }.Concat(Alternatives);
 }
 
 /// <summary>Crafts to queue for one item, in the machine that makes it.</summary>
@@ -55,7 +67,7 @@ public static class RecipeTree
     {
         if (memo.TryGetValue(item, out var known)) return known;
         if (!recipes.TryGetValue(item, out var recipe) || !visiting.Add(item)) return 0;
-        var depth = 1 + recipe.Inputs.Keys.Select(i => Depth(i, recipes, memo, visiting)).DefaultIfEmpty(0).Max();
+        var depth = 1 + recipe.Variants.SelectMany(v => v.Inputs.Keys).Select(i => Depth(i, recipes, memo, visiting)).DefaultIfEmpty(0).Max();
         visiting.Remove(item);
         memo[item] = depth;
         return depth;
@@ -107,14 +119,28 @@ public static class RecipeTree
                 continue;
             }
 
-            var crafts = (int)Math.Ceiling(missing / (double)Math.Max(1, recipe.OutAmount));
-            result.Orders.Add(new CraftOrder
+            // Split over the recipes like the game splits over crafters: each recipe's share is the part of the
+            // crafters that use it (the last one takes what is left after rounding up).
+            var variants = recipe.Variants.Where(v => v.Crafters > 0).ToList();
+            if (variants.Count == 0) variants.Add(recipe);
+            var allCrafters = Math.Max(1, variants.Sum(v => Math.Max(1, v.Crafters)));
+            var left = missing;
+            for (var v = 0; v < variants.Count && left > 0; v++)
             {
-                Item = next, Machine = recipe.Machine, Crafts = crafts, Amount = (long)crafts * recipe.OutAmount, Depth = best,
-                TopLevel = wanted.TryGetValue(next, out var asked) && asked > 0,
-            });
-            foreach (var input in recipe.Inputs)
-                demand[input.Key] = (demand.TryGetValue(input.Key, out var d) ? d : 0) + (long)input.Value * crafts;
+                var variant = variants[v];
+                var share = v == variants.Count - 1 ? left
+                    : Math.Min(left, (long)Math.Ceiling(missing * (double)Math.Max(1, variant.Crafters) / allCrafters));
+                left -= share;
+                if (share <= 0) continue;
+                var crafts = (int)Math.Ceiling(share / (double)Math.Max(1, variant.OutAmount));
+                result.Orders.Add(new CraftOrder
+                {
+                    Item = next, Machine = variant.Machine, Crafts = crafts, Amount = (long)crafts * variant.OutAmount, Depth = best,
+                    TopLevel = wanted.TryGetValue(next, out var asked) && asked > 0,
+                });
+                foreach (var input in variant.Inputs)
+                    demand[input.Key] = (demand.TryGetValue(input.Key, out var d) ? d : 0) + (long)input.Value * crafts;
+            }
         }
 
         foreach (var item in demand.Keys) result.Touched.Add(item);

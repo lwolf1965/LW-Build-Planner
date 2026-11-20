@@ -105,13 +105,17 @@ public sealed class OrderLedger
     /// Parts an order has to make. onlyMissing = false: everything asked for ("order all").
     /// onlyMissing = true: only what stock and running orders do not cover.
     /// </summary>
-    public Dictionary<string, long> NeedForNew(IReadOnlyDictionary<string, long> wanted, IReadOnlyDictionary<string, long> stock, bool onlyMissing)
+    /// pending: parts of blocks already ordered and not done (M3). "Order all" does not make them again; "order
+    /// missing" already counts them as on their way.
+    public Dictionary<string, long> NeedForNew(IReadOnlyDictionary<string, long> wanted, IReadOnlyDictionary<string, long> stock, bool onlyMissing,
+        IReadOnlyDictionary<string, long> pending = null)
     {
         var need = new Dictionary<string, long>();
         foreach (var want in wanted)
         {
             if (want.Value <= 0) continue;
-            var amount = onlyMissing ? Missing(want.Key, want.Value, stock.TryGetValue(want.Key, out var have) ? have : 0) : want.Value;
+            var ordered = pending != null && pending.TryGetValue(want.Key, out var p) ? p : 0;
+            var amount = onlyMissing ? Missing(want.Key, want.Value, stock.TryGetValue(want.Key, out var have) ? have : 0) : want.Value - ordered;
             if (amount > 0) need[want.Key] = amount;
         }
         return need;
@@ -186,6 +190,66 @@ public sealed class OrderLedger
         var keys = queued.Keys.Where(k => k.Crafter == crafter).ToList();
         foreach (var key in keys) queued.Remove(key);
         return keys.Select(k => k.Item).ToList();
+    }
+
+    /// <summary>Queued lines read back from a save: the crafters are not known yet (see Assign).</summary>
+    public const int Unassigned = 0;
+
+    /// <summary>The ledger's numbers per part, oldest order first, for the world save.</summary>
+    public List<SavedPart> Save()
+        => sequence.Select(item => new SavedPart
+        {
+            Item = item, Ordered = Ordered(item), Done = doneCount.TryGetValue(item, out var d) ? d : 0,
+            Waiting = waiting.TryGetValue(item, out var w) ? w : 0, Queued = QueuedOf(item),
+        }).ToList();
+
+    /// <summary>
+    /// A part read back from the world's save. Its queued parts belong to crafters not known yet (Unassigned): the
+    /// game kept the crafters' queues, Assign finds them again.
+    /// </summary>
+    public void Restore(SavedPart part)
+    {
+        if (string.IsNullOrEmpty(part.Item)) return;
+        if (!sequence.Contains(part.Item)) sequence.Add(part.Item);
+        ordered[part.Item] = Math.Max(0, part.Ordered);
+        if (part.Done > 0) doneCount[part.Item] = part.Done;
+        if (part.Waiting > 0) waiting[part.Item] = part.Waiting;
+        if (part.Queued > 0) queued[(Unassigned, part.Item)] = part.Queued;
+    }
+
+    /// <summary>Parts read back as queued whose crafters are not known yet.</summary>
+    public List<string> UnassignedItems() => queued.Keys.Where(k => k.Crafter == Unassigned).Select(k => k.Item).ToList();
+
+    /// <summary>
+    /// After a load: the unassigned queued parts of this item go to the crafters that still have it in their queues,
+    /// split evenly. None has it: the crafters made all of it before the save was loaded, it counts as done.
+    /// </summary>
+    public void Assign(string item, IReadOnlyList<int> crafters)
+    {
+        if (!queued.TryGetValue((Unassigned, item), out var amount)) return;
+        queued.Remove((Unassigned, item));
+        if (crafters.Count == 0)
+        {
+            doneCount[item] = (doneCount.TryGetValue(item, out var d) ? d : 0) + amount;
+            return;
+        }
+        for (var i = 0; i < crafters.Count; i++)
+        {
+            var share = amount / crafters.Count + (i < amount % crafters.Count ? 1 : 0);
+            if (share > 0) queued[(crafters[i], item)] = (queued.TryGetValue((crafters[i], item), out var q) ? q : 0) + share;
+        }
+    }
+
+    /// <summary>
+    /// After a load: parts saved as queued that no crafter has any more were lost with the queue (Lone 2026-11-20:
+    /// "not crafted parts, try make it"): they wait for a crafter again. Returns how many.
+    /// </summary>
+    public long Requeue(string item)
+    {
+        if (!queued.TryGetValue((Unassigned, item), out var amount)) return 0;
+        queued.Remove((Unassigned, item));
+        waiting[item] = (waiting.TryGetValue(item, out var w) ? w : 0) + amount;
+        return amount;
     }
 
     /// <summary>Gives up on an item that is still waiting (nobody can make it).</summary>

@@ -54,6 +54,19 @@ internal static class PlanStore
     public static string ProjectName { get; private set; }
 
     /// <summary>
+    /// Part of the blueprint was ordered or made already: removing it then needs a second click (Lone 2026-11-19), even
+    /// with "Confirm clearing" off; its next rounds are made from ore only, storage parts belong to the earlier rounds
+    /// (Lone 2026-11-20). Saved with the list.
+    /// </summary>
+    public static volatile bool ProjectStarted;
+
+    /// <summary>Inside the lock: a new blueprint, or none: its choices start over.</summary>
+    private static void NewProject()
+    {
+        ProjectStarted = false;
+    }
+
+    /// <summary>
     /// A blueprint was read: its lines replace the project lines in the list (only one blueprint at a time); hand-picked
     /// lines stay. Returns the name of the project it replaced, or null.
     /// </summary>
@@ -63,13 +76,10 @@ internal static class PlanStore
         lock (Gate)
         {
             previous = ProjectName;
-            foreach (var key in Entries.Where(p => p.Value.Project).Select(p => p.Key).ToList())
-            {
-                Entries.Remove(key);
-                Ordered.Remove(key);
-            }
+            foreach (var key in Entries.Where(p => p.Value.Project).Select(p => p.Key).ToList()) Entries.Remove(key);
             foreach (var line in lines) Entries[line.Key] = line;
             ProjectName = lines.Count > 0 ? name : null;
+            NewProject();
         }
         return previous;
     }
@@ -81,6 +91,7 @@ internal static class PlanStore
         {
             foreach (var key in Entries.Where(p => p.Value.Project).Select(p => p.Key).ToList()) Entries.Remove(key);
             ProjectName = null;
+            NewProject();
         }
     }
 
@@ -93,7 +104,11 @@ internal static class PlanStore
     /// <summary>Inside the lock: a project with no lines left is over.</summary>
     private static void ForgetEmptyProject()
     {
-        if (ProjectName != null && !Entries.Values.Any(e => e.Project)) ProjectName = null;
+        if (ProjectName != null && !Entries.Values.Any(e => e.Project))
+        {
+            ProjectName = null;
+            NewProject();
+        }
     }
 
     /// <summary>The block that was selected in the G menu when Ctrl+N was pressed; the window offers it with Add buttons. Count is unused.</summary>
@@ -179,50 +194,28 @@ internal static class PlanStore
         lock (Gate)
         {
             Entries.Clear();
-            Ordered.Clear();
             ProjectName = null;
+            NewProject();
         }
-    }
-
-    /// <summary>Blocks per line that the running orders cover (see OrderedBlocks). Not saved: orders are not saved either.</summary>
-    private static readonly Dictionary<object, int> Ordered = new(ReferenceEqualityComparer.Instance);
-
-    /// <summary>An order was placed for these lines (the list as it was checked for the order).</summary>
-    public static void MarkOrdered(IEnumerable<PlannedEntry> lines)
-    {
-        lock (Gate) OrderedBlocks.Mark(Ordered, lines.Select(e => new KeyValuePair<object, int>(e.Key, e.Count)));
-    }
-
-    /// <summary>The orders were stopped or removed before they were done: the list stays as it is.</summary>
-    public static void ForgetOrdered()
-    {
-        lock (Gate) Ordered.Clear();
     }
 
     /// <summary>
-    /// All orders are done: the ordered blocks leave the build list (lines added or raised since the last order keep the
-    /// rest). Returns how many blocks were taken off.
+    /// M3: blocks whose parts are all handed out (or were in storage already) leave their line. Returns how many were
+    /// taken (fewer when the player lowered the line meanwhile) and, when this took the blueprint's last block, its name.
     /// </summary>
-    public static int TakeOrdered()
+    public static (int Taken, string FinishedProject) TakeBlocks(object key, int count)
     {
-        var taken = 0;
         lock (Gate)
         {
-            if (Ordered.Count == 0) return 0;
-            var counts = Entries.ToDictionary(p => p.Key, p => p.Value.Count, ReferenceEqualityComparer.Instance);
-            var left = OrderedBlocks.Left(counts, Ordered, ReferenceEqualityComparer.Instance);
-            foreach (var (key, entry) in Entries.ToList())
-            {
-                var now = left.TryGetValue(key, out var n) ? n : 0;
-                if (now == entry.Count) continue;
-                taken += entry.Count - now;
-                if (now == 0) Entries.Remove(key);
-                else Entries[key] = entry.With(now);
-            }
-            Ordered.Clear();
+            if (count <= 0 || !Entries.TryGetValue(key, out var entry)) return (0, null);
+            var take = Math.Min(count, entry.Count);
+            if (take == entry.Count) Entries.Remove(key);
+            else Entries[key] = entry.With(entry.Count - take);
+            var project = ProjectName;
+            if (entry.Project) ProjectStarted = true;
             ForgetEmptyProject();
+            return (take, entry.Project && project != null && ProjectName == null ? project : null);
         }
-        return taken;
     }
 
     public static List<PlannedEntry> Snapshot()

@@ -195,7 +195,7 @@ internal class PlannerScreen : ScreenView
     }
 
     /// <summary>Order all / Order missing: both order buttons go off at once until the game thread has answered.</summary>
-    private void Order(OrderMode mode)
+    private void Order(OrderMode mode, bool orderWhatFits = false)
     {
         // Order all while orders run would make everything twice: say so instead of ordering (the button stays
         // clickable, so a click always gets an answer). Problems are answered by the check itself.
@@ -214,19 +214,20 @@ internal class PlannerScreen : ScreenView
             PluginLog.Info($"Window: order {mode} ignored, the previous order is still being answered");
             return;
         }
-        PluginLog.Info($"Window: order {mode} sent to the game thread");
+        PluginLog.Info($"Window: order {mode}{(orderWhatFits ? " (blueprint: what fits)" : "")} sent to the game thread");
         waitingSince = DateTime.Now;
         viewBeforeClick = view?.Time ?? DateTime.MinValue;
-        PlannerEngine.Enqueue(c => PlanService.Check(c, mode));
+        PlannerEngine.Enqueue(c => PlanService.Check(c, mode, orderWhatFits: orderWhatFits));
     }
 
     /// <summary>
     /// Settings "Confirm clearing" (off by default): the first click only arms the button (its text asks for a second
     /// click), a second click within 4 s does it. With the setting off every click counts at once.
     /// </summary>
-    private bool Confirmed(string which)
+    private bool Confirmed(string which, bool always = false)
     {
-        if (!PlannerSettings.Current.ConfirmClear) return true;
+        // always: a blueprint already partly made is never removed with one click (Lone 2026-11-19).
+        if (!always && !PlannerSettings.Current.ConfirmClear) return true;
         if (armed == which && DateTime.Now - armedAt <= TimeSpan.FromSeconds(4))
         {
             armed = null;
@@ -291,6 +292,7 @@ internal class PlannerScreen : ScreenView
             // Rebuild only when something changed, so hovering and scrolling are not disturbed every second.
             var project = PlanStore.ProjectName;
             var stamp = string.Join("|", plan.Select(p => p.Name + p.Count + (p.Project ? "p" : ""))) + "#" + project + "#" + armed + "#" + view?.Time.Ticks + "#"
+                        + view?.ProjectFits + "#"
                         + string.Join("|", orders.Select(o => $"{o.Item}{o.Done}/{o.Ordered}/{o.Waiting}/{o.Queued}/{o.State}{o.Detail}{o.Note}"));
             if (stamp == lastDrawn) return;
             lastDrawn = stamp;
@@ -302,7 +304,7 @@ internal class PlannerScreen : ScreenView
             // 1. Build list
             var list = Card(Tr.T("card.list"), Tr.T("hint.list", PlanLimits.Max(true), PlanLimits.Max(false)));
             if (plan.Count == 0) Line(list, Tr.T("empty"), Dim);
-            foreach (var entry in plan.Where(p => !p.Project)) list.Children.Add(ListRow(entry));
+            foreach (var entry in plan.Where(p => !p.Project)) list.Children.Add(ListRow(entry, view));
             // The blueprint project (one at a time): a heading with its name, size and an X for the whole blueprint,
             // then its lines (no line limit). Hand-picked lines stay above it.
             var projectLines = plan.Where(p => p.Project).ToList();
@@ -311,7 +313,10 @@ internal class PlannerScreen : ScreenView
                 var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 2) };
                 head.Children.Add(new TextBlock
                 {
-                    Text = Tr.T("list.project", project ?? "?", N(projectLines.Sum(p => (long)p.Count)), projectLines.Count),
+                    // In progress: which button ordered it (Lone 2026-11-20), so after a load it is clear the order goes on.
+                    Text = Tr.T("list.project", project ?? "?", N(projectLines.Sum(p => (long)p.Count)), projectLines.Count)
+                           + (OrderBook.ProjectOrderedWith is { } orderedWith
+                               ? "  " + Tr.T("list.inProgress", Tr.T(orderedWith == "All" ? "btn.orderAll" : "btn.orderMissing")) : ""),
                     FontSize = 16, FontWeight = FontWeight.Bold, Foreground = Head, VerticalAlignment = VerticalAlignment.Center,
                 });
                 var dropArmed = armed == "project";
@@ -327,7 +332,7 @@ internal class PlannerScreen : ScreenView
                     try
                     {
                         PluginLog.Info("Window: 'remove blueprint' clicked");
-                        if (Confirmed("project"))
+                        if (Confirmed("project", PlanStore.ProjectStarted))
                         {
                             PlanStore.RemoveProject();
                             PlanService.Refresh();
@@ -339,7 +344,26 @@ internal class PlannerScreen : ScreenView
                 };
                 head.Children.Add(drop);
                 list.Children.Add(head);
-                foreach (var entry in projectLines) list.Children.Add(ListRow(entry));
+                // M3: a blueprint short of ore is not ordered at all (half a ship would float and turn in space). Its
+                // line says what ore it lacks; "Order what fits" orders now the whole blocks the ore allows (Lone
+                // 2026-11-20: one click near the blueprint, no mode to switch); the rest keeps waiting here.
+                if (view?.ProjectShort != null)
+                {
+                    var choice = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 2) };
+                    choice.Children.Add(new TextBlock
+                    {
+                        Text = Tr.T("bp.waitsOre", view.ProjectShort), FontSize = 14, Foreground = Bad,
+                        TextWrapping = TextWrapping.Wrap, MaxWidth = 520, VerticalAlignment = VerticalAlignment.Center,
+                    });
+                    var fits = MakeButton(Tr.T("btn.orderFits", N(view.ProjectFits)), Tr.T("tip.orderFits"), () => Order(OrderMode.Missing, true));
+                    fits.Height = 26;
+                    fits.FontSize = 13;
+                    fits.Padding = new Thickness(8, 0, 8, 0);
+                    fits.IsEnabled = view.ProjectFits > 0;
+                    choice.Children.Add(fits);
+                    list.Children.Add(choice);
+                }
+                foreach (var entry in projectLines) list.Children.Add(ListRow(entry, view));
             }
 
             // 2. Parts
@@ -353,7 +377,10 @@ internal class PlannerScreen : ScreenView
                 foreach (var part in view.Parts)
                     parts.Children.Add(Row(part.Missing > 0 ? Warn : Good, (part.Item, 280), (N(part.Need), 100), (N(part.Stock), 110),
                         (N(part.Incoming), 100), (N(part.Missing), 100)));
-                if (view.Parts.All(p => p.Missing == 0)) Line(parts, Tr.T("parts.haveAll"), Good);
+                // Nothing missing: say whether storage alone has it or running orders cover part of it (Lone 2026-11-20:
+                // "everything is in storage" read wrong while the parts were still on order).
+                if (view.Parts.All(p => p.Missing == 0))
+                    Line(parts, Tr.T(view.Parts.Any(p => p.Incoming > 0) ? "parts.covered" : "parts.haveAll"), Good);
             }
 
             // 3. Problems
@@ -421,6 +448,7 @@ internal class PlannerScreen : ScreenView
             OrderState.Crafting => (Tr.T("state.crafting"), Busy),
             OrderState.Queued => (Tr.T("state.queued"), Warn),
             OrderState.WaitingForCrafter => (Tr.T("state.waitCrafter"), Warn),
+            OrderState.Next => (Tr.T("state.next"), Dim),
             OrderState.NoProgress => (Tr.T("state.noProgress"), Bad),
             _ => (Tr.T("state.stopped"), Dim),
         };
@@ -472,7 +500,7 @@ internal class PlannerScreen : ScreenView
     }
 
     /// <summary>One build list line: name, [-] count [+] [X]. Shift and Ctrl give the bigger steps.</summary>
-    private StackPanel ListRow(PlannedEntry entry)
+    private StackPanel ListRow(PlannedEntry entry, PlanView view)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 1, 0, 1) };
         row.Children.Add(new TextBlock
@@ -480,14 +508,25 @@ internal class PlannerScreen : ScreenView
             Text = entry.Name, Width = 380, FontSize = 15, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        row.Children.Add(StepButton("-", Tr.T("tip.minus"), entry, -1));
+        // A blueprint's lines are the blueprint: no -, + or X per line (Lone 2026-11-20); its heading's X removes it whole.
+        row.Children.Add(entry.Project ? new Border { Width = 26 } : StepButton("-", Tr.T("tip.minus"), entry, -1));
         row.Children.Add(new TextBlock
         {
             Text = entry.Count.ToString("N0"), Width = 52, FontSize = 15, Foreground = Brushes.White,
             TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         });
-        row.Children.Add(StepButton("+", Tr.T("tip.plus"), entry, +1));
-        row.Children.Add(StepButton("X", Tr.T("tip.remove"), entry, 0));
+        if (!entry.Project)
+        {
+            row.Children.Add(StepButton("+", Tr.T("tip.plus"), entry, +1));
+            row.Children.Add(StepButton("X", Tr.T("tip.remove"), entry, 0));
+        }
+        // M3: blocks of this line that "Order missing" leaves waiting for ore (a blueprint held as a whole says it once, above).
+        if (view != null && view.WaitingLines.TryGetValue(entry.Key, out var waiting) && waiting > 0)
+            row.Children.Add(new TextBlock
+            {
+                Text = Tr.T("list.waits", N(waiting)), FontSize = 13, Foreground = Bad, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(6, 0, 0, 0),
+            });
         return row;
     }
 

@@ -13,6 +13,8 @@ public sealed class PlanAlert
 {
     public AlertLevel Level;
     public string Text;
+    /// <summary>An ore deficit: "Order missing" then makes the whole blocks the ore allows instead of being blocked (M3).</summary>
+    public bool Ore;
 }
 
 /// <summary>What the game scan found about one grid, in plain numbers and names.</summary>
@@ -60,9 +62,14 @@ public static class PlanAlerts
         }
 
         foreach (var kv in tree.RawShortage.OrderBy(k => nameOf(k.Key), StringComparer.OrdinalIgnoreCase))
-            Add(AlertLevel.Error, isOre(kv.Key)
-                ? Tr.T("alert.ore", nameOf(kv.Key), N(kv.Value))
-                : Tr.T("alert.short", nameOf(kv.Key), N(kv.Value)));
+        {
+            var ore = isOre(kv.Key);
+            alerts.Add(new PlanAlert
+            {
+                Level = AlertLevel.Error, Ore = ore,
+                Text = ore ? Tr.T("alert.ore", nameOf(kv.Key), N(kv.Value)) : Tr.T("alert.short", nameOf(kv.Key), N(kv.Value)),
+            });
+        }
 
         foreach (var crafter in facts.UnlinkedCrafters)
             Add(AlertLevel.Warning, Tr.T("alert.crafterUnlinked", crafter.Name));

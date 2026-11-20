@@ -74,3 +74,6 @@ nunit-*.xml
 # Assistant instructions stay local
 /CLAUDE.md
 /AGENTS.md
+# Local test plan (Lone 2026-11-20: not in git)
+/TestPlan.md
+/ExperimentMap.md

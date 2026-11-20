@@ -33,11 +33,16 @@ public static class PlanFile
     public const string Header = "LW Build Planner list 2";
     public const string HeaderV1 = "LW Build Planner list 1";
     private const string ProjectRow = "#project";
+    private const string SavedRow = "#saved";
 
-    public static string Write(IEnumerable<PlanLine> lines, string project = null)
+    /// <param name="started">The blueprint was ordered already: its next rounds are made from ore only (BlockLine.NoStock).</param>
+    /// <param name="savedAt">The world's game time at the save (ticks), 0 = unknown: a load of an older save is told by it.</param>
+    public static string Write(IEnumerable<PlanLine> lines, string project = null, bool started = false, long savedAt = 0)
     {
         var text = new StringBuilder().Append(Header).Append('\n');
-        if (!string.IsNullOrWhiteSpace(project)) text.Append(ProjectRow).Append('\t').Append(Clean(project)).Append('\n');
+        if (savedAt > 0) text.Append(SavedRow).Append('\t').Append(savedAt.ToString(CultureInfo.InvariantCulture)).Append('\n');
+        if (!string.IsNullOrWhiteSpace(project))
+            text.Append(ProjectRow).Append('\t').Append(Clean(project)).Append(started ? "\tstarted" : "").Append('\n');
         foreach (var line in lines.Where(l => l.Count > 0 && !string.IsNullOrWhiteSpace(l.Block)))
             text.Append(Clean(line.Key ?? line.Block)).Append('\t').Append(Clean(line.Block)).Append('\t')
                 .Append(line.Count.ToString(CultureInfo.InvariantCulture)).Append('\t').Append(Clean(line.Name))
@@ -47,10 +52,19 @@ public static class PlanFile
 
     public static List<PlanLine> Read(string text) => Read(text, out _);
 
-    /// <summary>The lines, and the blueprint project's name (null when the list has no project).</summary>
-    public static List<PlanLine> Read(string text, out string project)
+    public static List<PlanLine> Read(string text, out string project) => Read(text, out project, out _);
+
+    public static List<PlanLine> Read(string text, out string project, out bool started) => Read(text, out project, out started, out _);
+
+    /// <summary>
+    /// The lines, the blueprint project's name (null when the list has no project), whether it was ordered already and
+    /// the world's game time when the file was written (0 = unknown).
+    /// </summary>
+    public static List<PlanLine> Read(string text, out string project, out bool started, out long savedAt)
     {
         project = null;
+        started = false;
+        savedAt = 0;
         var result = new List<PlanLine>();
         if (string.IsNullOrEmpty(text)) return result;
         var rows = text.Replace("\r\n", "\n").Split('\n');
@@ -59,9 +73,15 @@ public static class PlanFile
         foreach (var row in rows.Skip(1))
         {
             var cells = row.Split('\t');
+            if (cells[0] == SavedRow)
+            {
+                if (cells.Length > 1) long.TryParse(cells[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out savedAt);
+                continue;
+            }
             if (cells[0] == ProjectRow)
             {
                 if (cells.Length > 1 && !string.IsNullOrWhiteSpace(cells[1])) project = cells[1].Trim();
+                started = cells.Length > 2 && cells[2].Trim() == "started";
                 continue;
             }
             if (cells.Length < 3) continue;

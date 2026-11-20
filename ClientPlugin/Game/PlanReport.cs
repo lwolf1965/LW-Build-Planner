@@ -34,12 +34,41 @@ internal sealed class PlanReport
     public Dictionary<string, long> Need = new();
     /// <summary>Stock the crafters can reach, by item id.</summary>
     public Dictionary<string, long> Stock = new();
+    /// <summary>
+    /// Stock the recipe tree may use to make the list's parts: ingots, ore, sub-parts, minus what running orders still
+    /// need; the list's own parts at 0 (the order mode handles them). Used by the M3 block plan (BlockSets).
+    /// </summary>
+    public Dictionary<string, long> TreeStock = new();
     /// <summary>Blocks with no conveyor link (entities); the order book skips crafters in this set.</summary>
     public HashSet<object> Unlinked = new();
 
     public static string Id(ItemDefinition item) => item.Guid.ToString();
 
     public string NameOf(string id) => Items.TryGetValue(id, out var item) ? OrderJob.NameOf(item) : id;
+
+    /// <summary>
+    /// Logs how the ore of a plan was counted (Lone 2026-11-20: a Combustion Chamber stalled for titanium while the
+    /// check saw only iron short): every raw item (nothing on this grid makes it) with need, stock and shortage; parts
+    /// taken from stock instead of being made; what is made where; and the recipe the planner read for each part.
+    /// A raw item that is not ore means no crafter here makes it, so its own ore is never counted.
+    /// </summary>
+    public void LogResources(string title, TreeResult tree, IReadOnlyDictionary<string, long> stock)
+    {
+        long Of(IReadOnlyDictionary<string, long> d, string id) => d.TryGetValue(id, out var v) ? v : 0;
+        var raw = tree.Touched.Where(i => !Recipes.ContainsKey(i)).OrderBy(NameOf, StringComparer.OrdinalIgnoreCase)
+            .Select(i => $"{NameOf(i)}{(IsOre(i) ? "" : " (NOT ORE: no crafter here makes it)")} need {Of(tree.Consumed, i) + Of(tree.RawShortage, i):N0}"
+                         + $" stock {Of(stock, i):N0} short {Of(tree.RawShortage, i):N0}");
+        PluginLog.Info($"Resources ({title}): raw: {string.Join("; ", raw)}");
+        var fromStock = tree.Consumed.Where(c => c.Value > 0 && Recipes.ContainsKey(c.Key)).OrderBy(c => NameOf(c.Key), StringComparer.OrdinalIgnoreCase)
+            .Select(c => $"{NameOf(c.Key)} {c.Value:N0}");
+        PluginLog.Info($"Resources ({title}): parts taken from stock instead of made: {string.Join(", ", fromStock)}");
+        PluginLog.Info($"Resources ({title}): made: " + string.Join(", ", tree.Orders.OrderBy(o => o.Depth)
+            .Select(o => $"{NameOf(o.Item)} {o.Amount:N0} ({o.Crafts} crafts, {o.Machine}{(o.TopLevel ? ", queued by the planner" : "")})")));
+        PluginLog.Info($"Resources ({title}): recipes read: " + string.Join("; ", tree.Touched.Where(Recipes.ContainsKey)
+            .OrderBy(NameOf, StringComparer.OrdinalIgnoreCase)
+            .Select(i => $"{NameOf(i)} " + string.Join(" | ", Recipes[i].Variants.Select(r => $"[{r.Machine} x{r.Crafters}] {r.OutAmount} <- "
+                         + string.Join(" + ", r.Inputs.Select(n => $"{n.Value} {NameOf(n.Key)}")))))));
+    }
 
     /// <summary>Ore by the game's item type (ItemDefinition.Type has the Ore flag), read by name so an enum change can't break the build.</summary>
     public bool IsOre(string id) => Items.TryGetValue(id, out var item)
@@ -49,9 +78,10 @@ internal sealed class PlanReport
     /// <param name="onlyMissing">False = make every part of the list; true = only what stock and running orders do not cover.</param>
     /// <param name="ledgerItems">Item definitions of the ledger's ids (to read their recipes).</param>
     /// <param name="otherGrids">The player's other grids: their storage counts when the crafters reach it through conveyors (connectors).</param>
+    /// <param name="pending">Parts of list blocks already ordered and not done: not made again (their ore is already taken by the running orders).</param>
     public static PlanReport Build(GridStock grid, IReadOnlyDictionary<ItemDefinition, long> wanted,
         OrderLedger ledger, IReadOnlyDictionary<string, ItemDefinition> ledgerItems, IReadOnlyCollection<GridStock> otherGrids,
-        bool onlyMissing)
+        bool onlyMissing, IReadOnlyDictionary<string, long> pending = null)
     {
         var report = new PlanReport { Grid = grid };
         foreach (var pair in ledgerItems) report.Items[pair.Key] = pair.Value;
@@ -123,8 +153,9 @@ internal sealed class PlanReport
         report.Stock = usable;
         report.Unlinked = unlinkedBlocks;
         // What the player carries is not counted: only storage on the conveyor network (the vanilla backpack is small).
-        report.Need = ledger.NeedForNew(wantedIds, usable, onlyMissing);
+        report.Need = ledger.NeedForNew(wantedIds, usable, onlyMissing, pending);
         foreach (var id in wantedIds.Keys) left[id] = 0;
+        report.TreeStock = left;
         report.Tree = RecipeTree.Resolve(report.Need, left, recipes);
 
         foreach (var maker in grid.Makers.Where(m => m.Linked))
@@ -237,10 +268,18 @@ internal sealed class PlanReport
             var item = queue.Dequeue();
             var id = Id(item);
             if (!seen.Add(id)) continue;
+            // Every crafter that can make the item, with its own recipe: different kinds of crafter may make the same part
+            // from different ore, and the game spreads sub-part requests over all of them (see Recipe.Alternatives).
+            var byRecipe = new Dictionary<object, Recipe>(ReferenceEqualityComparer.Instance);
             foreach (var maker in grid.Makers)
             {
                 var recipe = CrafterApi.CanProduce(maker.Converter, item);
                 if (recipe == null) continue;
+                if (byRecipe.TryGetValue(recipe, out var known))
+                {
+                    known.Crafters++;
+                    continue;
+                }
                 var produced = CrafterApi.Outputs(recipe).Where(o => o.Item == item).Sum(o => o.Amount);
                 var inputs = new Dictionary<string, int>();
                 foreach (var input in CrafterApi.Inputs(recipe))
@@ -250,9 +289,12 @@ internal sealed class PlanReport
                     inputs[inputId] = (inputs.TryGetValue(inputId, out var have) ? have : 0) + (int)Math.Ceiling(input.Amount);
                     queue.Enqueue(input.Item);
                 }
-                recipes[id] = new Recipe { Item = id, OutAmount = (int)Math.Max(1, Math.Round(produced)), Machine = maker.Machine, Inputs = inputs };
-                break;
+                byRecipe[recipe] = new Recipe { Item = id, OutAmount = (int)Math.Max(1, Math.Round(produced)), Machine = maker.Machine, Inputs = inputs };
             }
+            if (byRecipe.Count == 0) continue;
+            var found = byRecipe.Values.OrderByDescending(r => r.Crafters).ThenBy(r => r.Machine, StringComparer.Ordinal).ToList();
+            found[0].Alternatives.AddRange(found.Skip(1));
+            recipes[id] = found[0];
         }
         return recipes;
     }

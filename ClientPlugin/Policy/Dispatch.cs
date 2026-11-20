@@ -34,6 +34,35 @@ public sealed class DispatchJob
 public static class Dispatch
 {
     /// <summary>
+    /// Parts held back because another part still on order is made from them, anywhere down its tree of parts ->
+    /// sub-parts -> components -> ore (Lone 2026-11-20: Assemblers making Heavy-Duty Plate take the Steel Plate ordered
+    /// for blocks from storage, and the game asks its Smelters only for what storage lacks, so the blocks end up short;
+    /// a sub-part the game makes for an ordered part takes its inputs from storage the same way). A part is handed out
+    /// only when no ordered part made from it is still waiting or in a crafter. Returns held part -> the ordered part it
+    /// waits for (the first one, by id).
+    /// inputsOf: per part, the parts its recipe takes (ordered or not, as deep as known). incoming: parts still
+    /// waiting or queued.
+    /// </summary>
+    public static Dictionary<string, string> Held(IReadOnlyDictionary<string, IReadOnlyCollection<string>> inputsOf, IEnumerable<string> incoming)
+    {
+        var ordered = incoming.Distinct().OrderBy(i => i, StringComparer.Ordinal).ToList();
+        var held = new Dictionary<string, string>();
+        foreach (var user in ordered)
+        {
+            // Everything this part is made from, all levels down.
+            var below = new HashSet<string>();
+            var open = new Stack<string>(new[] { user });
+            while (open.Count > 0)
+                if (inputsOf.TryGetValue(open.Pop(), out var inputs))
+                    foreach (var input in inputs)
+                        if (input != user && below.Add(input)) open.Push(input);
+            foreach (var part in ordered.Where(below.Contains))
+                if (!held.ContainsKey(part)) held[part] = user;
+        }
+        return held;
+    }
+
+    /// <summary>
     /// Most crafts one crafter gets in one batch (settings: batch size, default 10). Small batches keep every crafter busy
     /// until the part is finished.
     /// </summary>

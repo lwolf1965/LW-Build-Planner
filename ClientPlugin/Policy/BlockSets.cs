@@ -22,6 +22,11 @@ public sealed class BlockLine
     /// blocks first ("big removal of blocks from the list ... maybe more complex blocks first", Lone 2026-11-18).
     /// </summary>
     public double Complexity;
+    /// <summary>
+    /// Made from ore only, storage parts are not used (Lone 2026-11-20: a blueprint's next rounds; the parts in storage
+    /// are the earlier rounds' blocks, not welded yet).
+    /// </summary>
+    public bool NoStock;
 
     /// <summary>Pieces of all parts of one block: "smallest block first" goes by this.</summary>
     public long Size => Parts.Values.Sum();
@@ -150,7 +155,7 @@ public static class BlockSets
 
         // 1. Storage covers whole blocks, most complex first.
         if (onlyMissing)
-            foreach (var line in lines.Where(l => l.Count > 0 && l.Parts.Count > 0)
+            foreach (var line in lines.Where(l => l.Count > 0 && l.Parts.Count > 0 && !l.NoStock)
                          .OrderByDescending(l => l.Complexity).ThenByDescending(l => l.Size).ThenBy(l => l.Key, StringComparer.Ordinal))
             {
                 var whole = line.Parts.Where(p => p.Value > 0)
@@ -180,13 +185,13 @@ public static class BlockSets
 
         foreach (var (line, count) in chosen)
             plan.Craft.Add(new BlockGroup { Key = line.Key, Name = line.Name, Count = count, Parts = line.Parts });
-        var parts = Sum(chosen);
-        foreach (var part in parts)
+        foreach (var part in Sum(chosen.Where(c => !c.Line.NoStock)))
         {
             var fromStore = Math.Min(part.Value, avail.TryGetValue(part.Key, out var a) ? a : 0);
             if (fromStore > 0) plan.Credit[part.Key] = fromStore;
             if (part.Value - fromStore > 0) plan.Make[part.Key] = part.Value - fromStore;
         }
+        foreach (var part in Sum(chosen.Where(c => c.Line.NoStock))) AddTo(plan.Make, part.Key, part.Value);
 
         if (plan.Waiting.Count > 0)
         {
@@ -210,11 +215,13 @@ public static class BlockSets
         IReadOnlyDictionary<string, long> treeStock, IReadOnlyDictionary<string, Recipe> recipes)
     {
         var make = new Dictionary<string, long>();
-        foreach (var part in Sum(blocks))
+        var list = blocks.ToList();
+        foreach (var part in Sum(list.Where(b => !b.Line.NoStock)))
         {
             var left = part.Value - (avail.TryGetValue(part.Key, out var a) ? a : 0);
             if (left > 0) make[part.Key] = left;
         }
+        foreach (var part in Sum(list.Where(b => b.Line.NoStock))) AddTo(make, part.Key, part.Value); // ore only
         return RecipeTree.Resolve(make, treeStock, recipes);
     }
 
@@ -246,8 +253,10 @@ public static class BlockSets
 
     /// <summary>
     /// How many blocks of each group are done, going through the blocks in hand-out order: a block is done when the
-    /// parts handed out (queued in crafters, plus the Credit from storage) cover it and every block before it. Returns
-    /// one count per group, in the groups' order.
+    /// parts handed out (queued in crafters, plus the Credit from storage) cover it. Blocks not done yet keep the parts
+    /// they need, so a later block is done only with parts no earlier block waits for (Lone 2026-11-20: the list must
+    /// shrink faster; Steel-Plate-only blocks no longer wait behind blocks waiting for Heavy-Duty Plate). Returns one
+    /// count per group, in the groups' order.
     /// </summary>
     public static int[] Completed(IReadOnlyList<BlockGroup> groups, IReadOnlyDictionary<string, long> handedOut)
     {
@@ -263,8 +272,8 @@ public static class BlockSets
                 whole = Math.Min(whole, Math.Max(0, left) / part.Value);
             }
             done[g] = (int)whole;
-            foreach (var part in group.Parts) AddTo(used, part.Key, part.Value * whole);
-            if (whole < group.Count) break; // the next blocks wait for this one
+            // Done blocks use their parts; blocks not done yet keep theirs, so later blocks cannot take them.
+            foreach (var part in group.Parts) AddTo(used, part.Key, part.Value * group.Count);
         }
         return done;
     }

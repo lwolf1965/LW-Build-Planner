@@ -10,7 +10,10 @@ Status: **0.1.1.0, test build** (0.1.0.1 is listed in PluginHub-SE2). Single pla
 - **Pick** a block variant and size in the G menu and press `+` to add it to a build list (Shift / Ctrl for bigger steps).
 - **Whole blueprints**: in the terminal's Blueprints tab select a blueprint and press `+`: all its blocks (armor included) go into the list as one blueprint project. The game's Blueprint Details screen gets a Build Planner box: the ore the whole blueprint costs, whether your stock is enough (else the missing ore) and an **Add to Build Planner** button.
 - **Planner window**: build list, parts (need, in storage, on order, missing), problems, running orders.
-- **Order all** or **Order missing**: the parts are queued in batches on the crafters that are free, oldest part first; a crafter that finishes gets the next batch. Build as many crafters as you can: more crafters make a big build faster. The game's crafters request the sub-parts from smaller crafters themselves.
+- **Order all** or **Order missing**: whole blocks only (never half a block): storage covers blocks first, the rest is made smallest block first, and short of ore **Order missing** makes the blocks the ore allows while the others wait. A blueprint short of ore waits as a whole (half a ship would float) unless you press **Order what fits** on its line. Parts are queued in batches on the crafters that are free; a crafter that finishes gets the next batch. Build as many crafters as you can: more crafters make a big build faster. The game's crafters request the sub-parts from smaller crafters themselves.
+- **Exact crafting**: a part used inside another ordered part (at any depth: Steel Plate in Heavy-Duty Plate) is made after it, so no crafter eats the parts meant for the blocks; complex parts come first. The Orders box says why a crafter waits ("waits for ore: Iron", "waits for Steel Plate", "next: after Heavy-Duty Plate").
+- **Rounds**: a started blueprint's next rounds (**Order what fits**) are made from ore only, so mine, press, mine, press until the ship is done.
+- **Saved with the world**: the build list and the running orders are written at every save and go on after a load; parts lost from crafter queues are made again. Loading an older save opens a dialog: keep the list, or stop the orders and empty it.
 - **Checks** before ordering: ore deficit, missing crafter kind, no conveyor link, no storage, not enough cargo space (blocks the order; warning above 80 % of the free capacity). Crafters that are not working (unfinished, damaged, no power) are named in the notes.
 - **Follows the orders**: tells you when all crafters of a kind are busy, when an order makes no progress, and when everything is done. Then the ordered blocks leave the build list and the orders are cleared, so a finished build is not ordered twice.
 - Block costs and recipes are read from the game every time a world loads, so mods and game updates are picked up.
@@ -19,8 +22,8 @@ Status: **0.1.1.0, test build** (0.1.0.1 is listed in PluginHub-SE2). Single pla
 ## How to use it
 1. Open the G menu, select a block (group, variant, size) and press `+`. Repeat for every block you want to build.
 2. Press **Ctrl+N** to open the planner window. The Parts box shows what is missing; problems (ore, crafters, conveyors, cargo space) are listed before you order.
-3. Press **Order missing** (only what you do not have) or **Order all** (everything again).
-4. Watch the Orders box. When the last part arrives you get a green notification, and the blocks leave the list.
+3. Press **Order missing** (only what you do not have) or **Order all** (everything again). For a blueprint short of ore press **Order what fits (N)** on its heading; after mining press it again.
+4. Blocks leave the list as soon as all their parts are handed to crafters. Watch the Orders box; when the last part arrives you get a green notification.
 
 Manual: [Docs/UserManual.md](Docs/UserManual.md) ([русский](Docs/UserManual.ru.md)). Changes: [CHANGELOG.md](CHANGELOG.md).
 
@@ -47,8 +50,8 @@ Everything else (remove, clear, order) is a button in the window, so no stray ke
 
 ## Known limits
 - Parts already inside a crafter cannot be cancelled from the planner yet.
-- When all orders are done the ordered blocks leave the list (the setting **Keep list when done** keeps them for the next order).
-- The build list is saved with the world: written at every game save (also autosave), so after "exit without saving" or a crash it matches the save. Orders are not saved: the game keeps the crafters' queues, they finish them after a load, then "Order missing" orders the rest.
+- Ordered blocks leave the list as their parts are handed to crafters (the setting **Keep list when done** keeps them for the next order).
+- The build list is saved with the world: written at every game save (also autosave), so after "exit without saving" or a crash it matches the save. Running orders are saved too and go on after a load. The files belong to the newest save; loading an older one opens a dialog.
 - Orders go to the crafters of one grid (the one with the most crafters). Storage on other grids counts when those crafters reach it by conveyor.
 - What you carry is not counted, only storage on the conveyor network.
 - `+` in the G menu is read with a Windows call; Ctrl+N uses the game's own input and works everywhere.

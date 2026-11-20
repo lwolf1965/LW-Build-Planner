@@ -34,6 +34,13 @@ internal static class PlannerEngine
 
     public static void Enqueue(Action<PlannerContext> action) => Pending.Enqueue(action);
 
+    /// <summary>When the older-save dialog is due (Stopwatch seconds), or below 0 when none is.</summary>
+    private static double olderSaveAt = -1;
+    private static readonly Stopwatch Clock = Stopwatch.StartNew();
+
+    /// <summary>An older save was loaded (PlanSave): the dialog opens a few seconds after the world runs.</summary>
+    public static void AskAboutOlderSave() => olderSaveAt = Clock.Elapsed.TotalSeconds + 5;
+
     /// <summary>Build list, check result and orders belong to one world: a new session starts them empty.</summary>
     private static void ForgetWorld(WorldSessionComponent world)
     {
@@ -59,6 +66,13 @@ internal static class PlannerEngine
 
             var client = scene.GameClient?.TryGet<WorldSessionComponent>();
             if (client == null || world.Pause.IsPaused || client.Pause.IsPaused || world.IsSaving) return;
+
+            // The older-save dialog: once the world has run a few seconds (not under the loading screen).
+            if (olderSaveAt >= 0 && Clock.Elapsed.TotalSeconds >= olderSaveAt)
+            {
+                olderSaveAt = -1;
+                Avalonia.Threading.Dispatcher.UIThread.Post(Screens.OlderSaveDialog.Open);
+            }
 
             // Idle frames (nothing queued, session already seen) stop here, before the player lookup.
             var probed = Probed.TryGetValue(session, out _);

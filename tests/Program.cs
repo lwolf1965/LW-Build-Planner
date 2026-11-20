@@ -147,6 +147,10 @@ ledger.MarkQueued(2, "SteelPlate", 628);
 Check(ledger.Waiting.ContainsKey("SteelPlate") == false && ledger.QueuedOf("SteelPlate") == 1256, "queued parts leave waiting");
 Check(ledger.NeedForNew(first, stockNow, true).ContainsKey("SteelPlate") == false, "order missing again: running orders count, nothing ordered twice");
 Check(ledger.NeedForNew(first, stockNow, false)["SteelPlate"] == 1400, "order all again: a second full batch");
+Check(!ledger.NeedForNew(first, stockNow, false, new Dictionary<string, long> { ["SteelPlate"] = 1400 }).ContainsKey("SteelPlate"),
+      "M3 order all: blocks ordered and not done are not made again (no ore counted twice)");
+Check(ledger.NeedForNew(first, stockNow, false, new Dictionary<string, long> { ["SteelPlate"] = 400 })["SteelPlate"] == 1000,
+      "M3 order all: only the blocks not ordered yet");
 ledger.CrafterDone(1); ledger.CrafterDone(2);
 Check(ledger.Missing("SteelPlate", 1400, 1400) == 0 && ledger.Missing("SteelPlate", 1500, 1400) == 100, "finished parts are stock: missing = wanted - stock");
 ledger.MarkQueued(3, "SteelTube", 200);
@@ -445,7 +449,9 @@ Check(Tr.Setting("Batch size") == "Batch size", "settings: back to English");
 // Texts that name a window button use that button's own text in every language (so the player finds the button).
 bool Names(string key, string button) => Tr.Languages.Select((_, i) => i).All(i => Tr.Row(key)[i].Contains(Tr.Row(button)[i]));
 Check(Names("problems.missingOk", "btn.orderMissing") && Names("problems.missingNone", "btn.orderMissing") && Names("problems.missingBlocked", "btn.orderMissing"), "texts: the 'Order missing' notes name the real button in every language");
+Check(Names("dlg.olderSave", "btn.orderMissing") && Names("hud.listReset", "btn.orderMissing"), "texts: the older-save dialog names the real 'Order missing' button in every language");
 Check(Names("bp.allShort", "btn.orderAll"), "texts: the blueprint box's 'Order all' line names the real button in every language");
+Check(Names("problems.missingSome", "btn.orderMissing") && Tr.Languages.Select((_, i) => i).All(i => Tr.Row("hud.bpWaits")[i].Contains(Tr.Row("btn.orderFits")[i].Replace(" ({0})", "").Replace("（{0}）", ""))), "texts: M3 notes name the real buttons (Order missing, Order what fits) in every language");
 var confirmTip = "set:Empty list and Stop orders need a second click.";
 Check(Tr.Row(confirmTip) != null && Names(confirmTip, "btn.clearList") && Names(confirmTip, "btn.stopOrders"), "settings: the 'Confirm clearing' tip names the real buttons in every language");
 
@@ -507,8 +513,10 @@ Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 4
     "M3 done: the Thruster waits for its Motors although its Plate is out");
 Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 40, ["Pipe"] = 8, ["Motor"] = 2 }).SequenceEqual(new[] { 2, 1 }),
     "M3 done: all parts out = all blocks done");
-Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 100, ["Motor"] = 2 }).SequenceEqual(new[] { 0, 0 }),
-    "M3 done: in hand-out order: the Thruster is not done before the Tanks");
+Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 100, ["Motor"] = 2 }).SequenceEqual(new[] { 0, 1 }),
+    "M3 done: the Thruster is done before the Tanks when the Tanks' parts are kept for them (Plate 100 = 20 kept + 20)");
+Check(BlockSets.Completed(m3Groups, new Dictionary<string, long> { ["Plate"] = 30, ["Motor"] = 2 }).SequenceEqual(new[] { 0, 0 }),
+    "M3 done: a later block never takes parts an earlier block waits for (Plate 30: 20 kept for the Tanks, 10 < 20)");
 Check(BlockSets.PartOrder(m3Groups, new Dictionary<string, long> { ["Plate"] = 15, ["Pipe"] = 8 }).SequenceEqual(new[] { "Plate", "Motor" }),
     "M3 hand-out: Plate first (the 2nd Tank lacks it), then Motor (the Thruster); Pipe is all out");
 Check(BlockSets.PartOrder(m3Groups, new Dictionary<string, long>()).SequenceEqual(new[] { "Pipe", "Plate", "Motor" }),
@@ -542,6 +550,21 @@ var m3BpStock = BlockSets.Plan(m3BpLines, new Dictionary<string, long> { ["Plate
 Check(!m3BpStock.FromStock.ContainsKey("ShipTank") && m3BpStock.Waiting["ShipTank"] == 1,
     "M3 blueprint short of ore: storage does not take its blocks off the list either (it stays whole)");
 
+// Several recipes for one part (2026-11-20: titanium never counted): the game spreads requests evenly over all
+// crafters that can make it, each with its own recipe; the tree splits the same way.
+var altBlades = new Recipe { Item = "Blades", Machine = "Smelter", Crafters = 6, Inputs = new Dictionary<string, int> { ["OreNickel"] = 10 } };
+altBlades.Alternatives.Add(new Recipe { Item = "Blades", Machine = "Fabricator", Crafters = 2, Inputs = new Dictionary<string, int> { ["OreTitanium"] = 5 } });
+var altRecipes = new Dictionary<string, Recipe>
+{
+    ["Blades"] = altBlades,
+    ["Chamber"] = new Recipe { Item = "Chamber", Machine = "Assembler", Inputs = new Dictionary<string, int> { ["Blades"] = 2 } },
+};
+var altTree = RecipeTree.Resolve(new Dictionary<string, long> { ["Chamber"] = 40 }, new Dictionary<string, long> { ["OreNickel"] = 100000 }, altRecipes);
+Check(altTree.RawShortage.GetValueOrDefault("OreTitanium") == 100 && !altTree.RawShortage.ContainsKey("OreNickel"),
+    "recipes: 80 Blades split 6:2 over Smelter (nickel) and Fabricator (titanium): 20 need 100 titanium, short when there is none");
+Check(altTree.Orders.Where(o => o.Item == "Blades").Sum(o => o.Amount) == 80 && altTree.Orders.Count(o => o.Item == "Blades") == 2,
+    "recipes: both crafter kinds get their share, 60 + 20 = 80 Blades");
+
 var m3Ledger = new OrderLedger();
 m3Ledger.Commit(new Dictionary<string, long> { ["Plate"] = 20 });
 m3Ledger.Reserve(new Dictionary<string, long> { ["Plate"] = 50 }); // 30 in storage (covered blocks) + the 20 on order
@@ -554,6 +577,86 @@ m3Ledger.Clear();
 Check(m3Ledger.Reserved["Plate"] == 25, "M3 kept parts: stopping the orders keeps them (the blocks stay off the list)");
 m3Ledger.ClampReserved(new Dictionary<string, long>());
 Check(!m3Ledger.Reserved.ContainsKey("Plate"), "M3 kept parts: all used = nothing kept");
+
+// A started blueprint's next rounds are made from ore only (Lone 2026-11-20: storage holds the earlier rounds' parts).
+var nextRound = BL("Wall", 5, 10, ("Plate", 2));
+nextRound.NoStock = true;
+var roundPlan = BlockSets.Plan(new List<BlockLine> { nextRound }, new Dictionary<string, long> { ["Plate"] = 100 },
+    new Dictionary<string, long> { ["OreIron"] = 40 }, m3Recipes, Ore, true, null);
+Check(roundPlan.FromStock.Count == 0 && roundPlan.Craft.Single().Count == 2 && roundPlan.Make["Plate"] == 4 && roundPlan.Credit.Count == 0,
+    "next round: 100 Plate in storage are not used, 40 iron make 2 of 5 walls (4 Plate)");
+var listText = PlanFile.Write(new[] { new PlanLine { Key = "k", Block = "b", Count = 1, Name = "n", Project = true } }, "Dart", true);
+PlanFile.Read(listText, out var startedName, out var startedFlag);
+Check(startedName == "Dart" && startedFlag, "list file: a started blueprint stays started after a load");
+var stampText = PlanFile.Write(new[] { new PlanLine { Key = "k", Block = "b", Count = 1, Name = "n" } }, null, false, 123456789);
+var stampLines = PlanFile.Read(stampText, out _, out _, out var stampAt);
+Check(stampAt == 123456789 && stampLines.Count == 1, "list file: the save's game time is kept (an older save is told by it), the line still reads");
+var lostLedger = new OrderLedger();
+lostLedger.Restore(new SavedPart { Item = "Plate", Ordered = 50, Queued = 30, Waiting = 5 });
+Check(lostLedger.Requeue("Plate") == 30 && lostLedger.Waiting["Plate"] == 35 && lostLedger.UnassignedItems().Count == 0,
+    "orders load: parts no crafter has any more wait for a crafter again (5 + 30)");
+
+// Low parts wait for the ordered parts made from them (Lone 2026-11-20: HDP crafters ate the blocks' Steel Plate).
+var heldInputs = new Dictionary<string, IReadOnlyCollection<string>>
+{
+    ["HDP"] = new[] { "SteelPlate" }, ["Chamber"] = new[] { "Blades", "Tube" }, ["SteelPlate"] = Array.Empty<string>(),
+};
+var heldNow = Dispatch.Held(heldInputs, new[] { "HDP", "SteelPlate", "Chamber", "Blades", "Tube" });
+Check(heldNow["SteelPlate"] == "HDP" && heldNow["Blades"] == "Chamber" && heldNow["Tube"] == "Chamber" && !heldNow.ContainsKey("HDP"),
+    "hold: Steel Plate waits for Heavy-Duty Plate, Blades and Tube for the Combustion Chamber");
+Check(Dispatch.Held(heldInputs, new[] { "SteelPlate", "Blades" }).Count == 0, "hold: the users are made = nothing held");
+var deepInputs = new Dictionary<string, IReadOnlyCollection<string>>
+{
+    ["Thruster"] = new[] { "Chamber" }, ["Chamber"] = new[] { "Blades", "Grid" }, ["Blades"] = new[] { "Nickel" }, ["Grid"] = new[] { "Cobalt" },
+};
+var deepHeld = Dispatch.Held(deepInputs, new[] { "Thruster", "Blades" });
+Check(deepHeld.Count == 1 && deepHeld["Blades"] == "Thruster",
+    "hold: down the tree: ordered Blades wait for an ordered Thruster whose Chamber (made by the game) uses them");
+
+// After a load the finished groups are gone: their parts leave the handed-out count, the others stay as they were.
+var loadGroups = new List<BlockGroup>
+{
+    new() { Key = "Tank", Count = 2, Parts = new Dictionary<string, long> { ["Plate"] = 10, ["Pipe"] = 4 } },
+    new() { Key = "Wall", Count = 3, Parts = new Dictionary<string, long> { ["Plate"] = 5 } },
+    new() { Key = "Cube", Count = 4, Parts = new Dictionary<string, long> { ["Plate"] = 5 } },
+};
+var before = BlockSets.Completed(loadGroups, new Dictionary<string, long> { ["Plate"] = 50 });
+var after = BlockSets.Completed(new List<BlockGroup> { loadGroups[0], loadGroups[2] }, new Dictionary<string, long> { ["Plate"] = 50 - 15 });
+Check(before.SequenceEqual(new[] { 0, 3, 3 }) && after.SequenceEqual(new[] { 0, 3 }),
+    "orders load: a finished group's parts leave the count, no block is finished twice (Cube stays at 3)");
+
+// Orders saved with the world (Lone 2026-11-20: after a load the order goes on).
+var saveLedger = new OrderLedger();
+saveLedger.Commit(new Dictionary<string, long> { ["Plate"] = 100, ["Motor"] = 10 });
+saveLedger.MarkQueued(3, "Plate", 40);
+saveLedger.MarkQueued(4, "Plate", 20);
+saveLedger.Arrived("Plate", 15);
+var savedOrders = new SavedOrders
+{
+    Mode = "All", Elapsed = 72.5, HandedOut = new Dictionary<string, long> { ["Plate"] = 60 }, Parts = saveLedger.Save(),
+    Groups = { new SavedGroup { Key = "abc", Project = true, Count = 5, Done = 2, Parts = new Dictionary<string, long> { ["Plate"] = 20, ["Motor"] = 2 } } },
+};
+var orderText = OrderFile.Write(savedOrders);
+var ordersBack = OrderFile.Read(orderText);
+Check(ordersBack != null && ordersBack.Mode == "All" && Math.Abs(ordersBack.Elapsed - 72.5) < 0.01 && ordersBack.HandedOut["Plate"] == 60
+      && ordersBack.Groups.Single() is { Key: "abc", Project: true, Count: 5, Done: 2 } g && g.Parts["Motor"] == 2,
+    "orders file: mode, time, groups and parts handed out read back");
+var plateBack = ordersBack.Parts.First(p => p.Item == "Plate");
+Check(ordersBack.Parts[0].Item == "Plate" && plateBack.Ordered == 100 && plateBack.Done == 15 && plateBack.Waiting == 40 && plateBack.Queued == 45,
+    "orders file: per part ordered 100, done 15, waiting 40, queued 45 (oldest order first)");
+Check(OrderFile.Read("LW Build Planner list 2\nx\ty\t1\n") == null && OrderFile.Read("") == null, "orders file: another file or none = no orders");
+
+var loadLedger = new OrderLedger();
+foreach (var part in ordersBack.Parts) loadLedger.Restore(part);
+Check(loadLedger.Active && loadLedger.Waiting["Plate"] == 40 && loadLedger.UnassignedItems().SequenceEqual(new[] { "Plate" }),
+    "orders load: waiting parts go on, queued parts wait for their crafters to be found");
+loadLedger.Assign("Plate", new[] { 7, 8 });
+Check(loadLedger.QueuedOfCrafter(7) == 23 && loadLedger.QueuedOfCrafter(8) == 22 && loadLedger.UnassignedItems().Count == 0,
+    "orders load: queued parts split over the crafters that still have them (45 = 23 + 22)");
+var madeLedger = new OrderLedger();
+madeLedger.Restore(new SavedPart { Item = "Motor", Ordered = 10, Queued = 10 });
+madeLedger.Assign("Motor", Array.Empty<int>());
+Check(!madeLedger.Active && madeLedger.Done("Motor") == 10, "orders load: no crafter has them any more = they were made");
 
 Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
 return fails == 0 ? 0 : 1;
