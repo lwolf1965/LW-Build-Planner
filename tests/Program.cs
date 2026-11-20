@@ -166,10 +166,14 @@ Check(!ledger.NeedForNew(first, stockNow, false, new Dictionary<string, long> { 
       "M3 order all: blocks ordered and not done are not made again (no ore counted twice)");
 Check(ledger.NeedForNew(first, stockNow, false, new Dictionary<string, long> { ["SteelPlate"] = 400 })["SteelPlate"] == 1000,
       "M3 order all: only the blocks not ordered yet");
-ledger.CrafterDone(1); ledger.CrafterDone(2);
+ledger.CrafterLost(1); ledger.CrafterLost(2); ledger.DropWaiting("SteelPlate");
 Check(ledger.Missing("SteelPlate", 1400, 1400) == 0 && ledger.Missing("SteelPlate", 1500, 1400) == 100, "finished parts are stock: missing = wanted - stock");
 ledger.MarkQueued(3, "SteelTube", 200);
-Check(ledger.CrafterDone(3).Single() == "SteelTube" && !ledger.Active, "a finished crafter closes its lines");
+var tubesWaiting = ledger.Waiting.GetValueOrDefault("SteelTube");
+Check(ledger.CrafterLost(3).Single() is { Key: "SteelTube", Value: 200 } && ledger.QueuedOfCrafter(3) == 0
+      && ledger.Waiting["SteelTube"] == tubesWaiting + 200, "K3: a crafter that is gone gives its queued parts back to waiting");
+ledger.DropWaiting("SteelTube");
+Check(!ledger.Active, "nothing queued and nothing waiting: not active");
 ledger.MarkQueued(1, "Wire", 100);
 ledger.MarkQueued(2, "Wire", 50);
 Check(ledger.Arrived("Wire", 120) == 0 && ledger.QueuedOf("Wire") == 30 && ledger.CraftersWithOrders.Single() == 2, "arrived parts close the queued lines in order");

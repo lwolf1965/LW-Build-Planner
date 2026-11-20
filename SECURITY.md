@@ -8,11 +8,13 @@ Only the latest version is supported. See the [changelog](CHANGELOG.md).
 
 - It runs inside the game as a Pulsar plugin, compiled from this source on your machine.
 - It makes **no network connections**, starts no programs and loads no other code.
-- It writes **two kinds of files**:
+- It writes **three kinds of files**:
   - the build list of each world, a small text file in the game's data folder
     (usually `%AppData%\SpaceEngineers2\LwBuildPlanner\Worlds\<world>.txt`). The file name is made from the world's
     save name with only letters, digits, `-` and `_`, so it cannot leave that folder. It is written when the game
-    saves the world, and removed at a save when the list is empty (the plugin deletes no other file);
+    saves the world, and removed at a save when the list is empty;
+  - the running orders of each world, next to it (`<world>.orders.txt`, same name rule, same save moment). It is
+    removed at a save when no orders run (the plugin deletes no other file);
   - its settings, `Config.xml` in the plugin's own Pulsar data folder.
 
   Its messages go to the game log.

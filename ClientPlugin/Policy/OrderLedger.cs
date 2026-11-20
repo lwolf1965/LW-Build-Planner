@@ -151,15 +151,23 @@ public sealed class OrderLedger
         return left;
     }
 
-    /// <summary>The crafter is gone (removed, grid lost): its lines are closed. Returns the items it had.</summary>
-    public List<string> CrafterDone(int crafter)
+    /// <summary>
+    /// The crafter is gone (removed, grid lost) with parts of the planner in its queue: they were not made, so they wait
+    /// for the other crafters again (K3). Returns what went back, per item.
+    /// </summary>
+    public Dictionary<string, long> CrafterLost(int crafter)
     {
-        var keys = queued.Keys.Where(k => k.Crafter == crafter).ToList();
-        foreach (var key in keys) queued.Remove(key);
-        return keys.Select(k => k.Item).ToList();
+        var lost = new Dictionary<string, long>();
+        foreach (var key in queued.Keys.Where(k => k.Crafter == crafter).ToList())
+        {
+            lost[key.Item] = queued[key];
+            waiting[key.Item] = (waiting.TryGetValue(key.Item, out var w) ? w : 0) + queued[key];
+            queued.Remove(key);
+        }
+        return lost;
     }
 
-    /// <summary>Queued lines read back from a save: the crafters are not known yet (see Assign).</summary>
+    /// <summary>Crafter id of queued lines read back from a save: the crafters are not known yet (see OrderBook.FindQueuedAgain).</summary>
     public const int Unassigned = 0;
 
     /// <summary>The ledger's numbers per part, oldest order first, for the world save.</summary>

@@ -426,8 +426,16 @@ internal static class OrderBook
             }
             LastStock[itemId] = stock;
         }
+        // K3: a crafter that is gone (removed, grid lost) did not make its queued parts: they wait for the others again
+        // and leave the handed-out count until they are handed out again (more made if it comes back, never fewer).
         foreach (var id in Ledger.CraftersWithOrders.Where(c => c != OrderLedger.Unassigned && !byId.ContainsKey(c)).ToList())
-            PluginLog.Info($"Crafter '{(CrafterNames.TryGetValue(id, out var gone) ? gone : "?")}' is gone, its orders are closed: {string.Join(", ", Ledger.CrafterDone(id).Select(NameOf))}");
+        {
+            var lost = Ledger.CrafterLost(id);
+            foreach (var (itemId, amount) in lost)
+                if (HandedOut.TryGetValue(itemId, out var handed)) HandedOut[itemId] = Math.Max(0, handed - amount);
+            PluginLog.Info($"Crafter '{(CrafterNames.TryGetValue(id, out var gone) ? gone : "?")}' is gone, its parts wait for the other crafters again: "
+                           + string.Join(", ", lost.Select(l => $"{l.Value:N0} {NameOf(l.Key)}")));
+        }
 
         // 1b. The crafters' queues: a crafter that no longer has the recipe of its line in its queue has made all of it,
         //     even when the parts went out of storage at once (welding while crafting: stream test 2026-11-19, 1,800
