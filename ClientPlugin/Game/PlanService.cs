@@ -149,7 +149,7 @@ internal static class PlanService
             // way (Lone 2026-11-20: "Order what fits (27)" with no new iron; the parts of blocks that had left the
             // list were counted as free).
             var onWay = ledger.Incoming(id);
-            var free = ledger.Available(id, report.Stock.TryGetValue(id, out var stock) ? stock : 0)
+            var free = (report.Stock.TryGetValue(id, out var stock) ? stock : 0) + onWay
                        - Math.Max(onWay, pendingParts.TryGetValue(id, out var kept) ? kept : 0);
             if (free > 0) available[id] = free;
         }

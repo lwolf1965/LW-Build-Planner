@@ -24,39 +24,6 @@ public sealed class OrderLedger
     private readonly Dictionary<string, long> ordered = new();
     private readonly Dictionary<string, long> doneCount = new();
     private readonly List<string> sequence = new();
-    private readonly Dictionary<string, long> reserved = new();
-
-    /// <summary>
-    /// Parts kept for blocks that already left the build list (covered from storage or all their parts handed out,
-    /// M3): they are in storage or on their way, waiting to be welded. They are not offered to the list again, so a
-    /// second "Order missing" does not count them twice. Kept when orders stop or finish; shrinks when the parts leave
-    /// storage (welded: ClampReserved); gone with the world.
-    /// </summary>
-    public IReadOnlyDictionary<string, long> Reserved => reserved;
-
-    public void Reserve(IReadOnlyDictionary<string, long> parts)
-    {
-        foreach (var part in parts)
-            if (part.Value > 0) reserved[part.Key] = (reserved.TryGetValue(part.Key, out var r) ? r : 0) + part.Value;
-    }
-
-    /// <summary>Kept parts that are no longer in storage nor on their way were used (welded): they are not kept any more.</summary>
-    public void ClampReserved(IReadOnlyDictionary<string, long> stock)
-    {
-        foreach (var item in reserved.Keys.ToList())
-        {
-            var there = (stock.TryGetValue(item, out var s) ? s : 0) + Incoming(item);
-            if (there <= 0) reserved.Remove(item);
-            else if (reserved[item] > there) reserved[item] = there;
-        }
-    }
-
-    /// <summary>Parts the build list can count on: storage + on their way - kept for blocks already off the list.</summary>
-    public long Available(string item, long stock)
-        => Math.Max(0, stock + Incoming(item) - (reserved.TryGetValue(item, out var r) ? r : 0));
-
-    /// <summary>A new world: nothing is kept.</summary>
-    public void ClearReserved() => reserved.Clear();
 
     public IReadOnlyDictionary<string, long> Waiting => waiting;
 
@@ -98,8 +65,8 @@ public sealed class OrderLedger
     /// <summary>True while something is waiting or queued (the planner has to keep watching).</summary>
     public bool Active => waiting.Values.Any(v => v > 0) || queued.Count > 0;
 
-    /// <summary>What the stock and the running orders do not cover (parts kept for blocks off the list do not count).</summary>
-    public long Missing(string item, long wanted, long stock) => Math.Max(0, wanted - Available(item, stock));
+    /// <summary>What the stock and the running orders do not cover: storage counts as it is, nothing is set aside.</summary>
+    public long Missing(string item, long wanted, long stock) => Math.Max(0, wanted - (stock + Incoming(item)));
 
     /// <summary>
     /// Parts an order has to make. onlyMissing = false: everything asked for ("order all").
@@ -219,26 +186,6 @@ public sealed class OrderLedger
 
     /// <summary>Parts read back as queued whose crafters are not known yet.</summary>
     public List<string> UnassignedItems() => queued.Keys.Where(k => k.Crafter == Unassigned).Select(k => k.Item).ToList();
-
-    /// <summary>
-    /// After a load: the unassigned queued parts of this item go to the crafters that still have it in their queues,
-    /// split evenly. None has it: the crafters made all of it before the save was loaded, it counts as done.
-    /// </summary>
-    public void Assign(string item, IReadOnlyList<int> crafters)
-    {
-        if (!queued.TryGetValue((Unassigned, item), out var amount)) return;
-        queued.Remove((Unassigned, item));
-        if (crafters.Count == 0)
-        {
-            doneCount[item] = (doneCount.TryGetValue(item, out var d) ? d : 0) + amount;
-            return;
-        }
-        for (var i = 0; i < crafters.Count; i++)
-        {
-            var share = amount / crafters.Count + (i < amount % crafters.Count ? 1 : 0);
-            if (share > 0) queued[(crafters[i], item)] = (queued.TryGetValue((crafters[i], item), out var q) ? q : 0) + share;
-        }
-    }
 
     /// <summary>
     /// After a load: parts saved as queued that no crafter has any more were lost with the queue (Lone 2026-11-20:

@@ -293,6 +293,7 @@ internal class PlannerScreen : ScreenView
             var project = PlanStore.ProjectName;
             var stamp = string.Join("|", plan.Select(p => p.Name + p.Count + (p.Project ? "p" : ""))) + "#" + project + "#" + armed + "#" + view?.Time.Ticks + "#"
                         + view?.ProjectFits + "#"
+                        + OrderBook.OreShortText + "#"
                         + string.Join("|", orders.Select(o => $"{o.Item}{o.Done}/{o.Ordered}/{o.Waiting}/{o.Queued}/{o.State}{o.Detail}{o.Note}"));
             if (stamp == lastDrawn) return;
             lastDrawn = stamp;
@@ -427,6 +428,13 @@ internal class PlannerScreen : ScreenView
                 headLine.Children.Add(elapsedText);
                 card.Children.Add(headLine);
                 card.Children.Add(Bar(ordered > 0 ? (double)done / ordered : 0, allDone ? Good : Busy, 16));
+                // K2: the ore the stalled parts still lack (empty when nothing is short).
+                if (OrderBook.OreShortText.Length > 0)
+                    card.Children.Add(new TextBlock
+                    {
+                        Text = Tr.T("orders.oreShort", OrderBook.OreShortText), FontSize = 15, Foreground = Bad,
+                        TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0),
+                    });
                 foreach (var order in orders) card.Children.Add(OrderRow(order));
             }
 

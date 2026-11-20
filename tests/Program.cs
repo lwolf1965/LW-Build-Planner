@@ -90,6 +90,21 @@ Check(Crafts(sharedStock, "SteelTube") == 1 && sharedStock.RawShortage["OreIron"
 
 Check(tree.Orders.Count(o => o.TopLevel) == 1 && tree.Orders.Single(o => o.TopLevel).Item == "AdvancedCompressor", "only the asked part is top level (the game cascades the rest)");
 
+// K2: the ore the running orders still lack (Policy/OreShort)
+var k2Running = new Dictionary<string, long> { ["AdvancedCompressor"] = 1 };
+var k2None = OreShort.Of(k2Running, new Dictionary<string, long>(), recipes);
+Check(k2None.Count == 5 && k2None["OreTitanium"] == 240 && k2None["OreNickel"] == 90, "ore short: all the ore of the stalled part when storage has none");
+var k2Some = OreShort.Of(k2Running, new Dictionary<string, long> { ["OreTitanium"] = 240, ["OreNickel"] = 90, ["OreIron"] = 10, ["AdvancedCompressor"] = 99 }, recipes);
+Check(k2Some.Count == 3 && k2Some["OreIron"] == 5 && k2Some["OreLead"] == 100 && k2Some["OreCopper"] == 40,
+      "ore short: ore in storage is taken off; stock of the running part itself is ignored (it is made regardless)");
+Check(OreShort.Of(k2Running, new Dictionary<string, long> { ["OreTitanium"] = 240, ["OreNickel"] = 90, ["OreIron"] = 15, ["OreLead"] = 100, ["OreCopper"] = 40 }, recipes).Count == 0,
+      "ore short: enough ore = nothing short");
+string K2Name(string id) => id.Replace("Ore", "");
+Check(OreShort.Format(k2None, K2Name, (n, a) => $"{n} {a}") == "Titanium 240, Lead 100, Nickel 90 (+2)", "ore short text: the three largest shortages, then +N");
+Check(OreShort.Format(new Dictionary<string, long> { ["OreIron"] = 12000 }, K2Name, (n, a) => $"{a} more {n}") == "12000 more Iron", "ore short text: one ore");
+Check(OreShort.Format(new Dictionary<string, long>(), K2Name, (n, a) => n) == "" && OreShort.Format(new Dictionary<string, long> { ["OreIron"] = 0 }, K2Name, (n, a) => n) == "",
+      "ore short text: nothing short = empty");
+
 // Alerts
 string Nm(string id) => id;
 bool Ore(string id) => id.StartsWith("Ore");
@@ -355,16 +370,6 @@ Tr.Use("en-US");
 Check(Tr.Language == "en" && PlanAlerts.Build(tree, Good(), Nm, Ore).Any(a => a.Text.Contains("Ore deficit: OreTitanium, 240")), "texts: back to English");
 
 
-// ---- finished orders take their blocks off the build list (OrderedBlocks)
-var ordered = new Dictionary<string, int>();
-OrderedBlocks.Mark(ordered, new Dictionary<string, int> { ["tank"] = 2, ["door"] = 2 });
-Check(OrderedBlocks.Left(new Dictionary<string, int> { ["tank"] = 2, ["door"] = 2 }, ordered).Count == 0, "done: ordered lines leave the list");
-OrderedBlocks.Mark(ordered, new Dictionary<string, int> { ["tank"] = 2, ["door"] = 3 });
-Check(ordered["tank"] == 2 && ordered["door"] == 3, "done: a second order on the same list does not count a line twice");
-var afterDone = OrderedBlocks.Left(new Dictionary<string, int> { ["tank"] = 5, ["door"] = 3, ["light"] = 4 }, ordered);
-Check(afterDone.Count == 2 && afterDone["tank"] == 3 && afterDone["light"] == 4, "done: blocks added after the order stay");
-Check(OrderedBlocks.Left(new Dictionary<string, int> { ["tank"] = 1 }, ordered).Count == 0, "done: a line lowered after the order goes, never below 0");
-
 // ---- build list file (PlanFile): kept per world across save and restart
 var savedLines = new[]
 {
@@ -567,16 +572,10 @@ Check(altTree.Orders.Where(o => o.Item == "Blades").Sum(o => o.Amount) == 80 && 
 
 var m3Ledger = new OrderLedger();
 m3Ledger.Commit(new Dictionary<string, long> { ["Plate"] = 20 });
-m3Ledger.Reserve(new Dictionary<string, long> { ["Plate"] = 50 }); // 30 in storage (covered blocks) + the 20 on order
-Check(m3Ledger.Available("Plate", 30) == 0 && m3Ledger.Missing("Plate", 10, 30) == 10,
-    "M3 kept parts: blocks off the list keep their parts; the list does not count them again");
-Check(m3Ledger.Available("Plate", 45) == 15, "M3 kept parts: more in storage than kept = the rest is free for the list");
-m3Ledger.ClampReserved(new Dictionary<string, long> { ["Plate"] = 5 }); // 25 welded
-Check(m3Ledger.Reserved["Plate"] == 25 && m3Ledger.Available("Plate", 5) == 0, "M3 kept parts: welded parts leave storage, the kept count follows (5 stored + 20 coming)");
+Check(m3Ledger.Missing("Plate", 60, 30) == 10 && m3Ledger.Missing("Plate", 10, 30) == 0 && m3Ledger.Missing("Plate", 5, 0) == 0,
+    "missing = wanted - storage - on order (storage counts as it is, no parts are kept back)");
 m3Ledger.Clear();
-Check(m3Ledger.Reserved["Plate"] == 25, "M3 kept parts: stopping the orders keeps them (the blocks stay off the list)");
-m3Ledger.ClampReserved(new Dictionary<string, long>());
-Check(!m3Ledger.Reserved.ContainsKey("Plate"), "M3 kept parts: all used = nothing kept");
+Check(m3Ledger.Missing("Plate", 60, 30) == 30, "missing: with the orders stopped only storage counts");
 
 // A started blueprint's next rounds are made from ore only (Lone 2026-11-20: storage holds the earlier rounds' parts).
 var nextRound = BL("Wall", 5, 10, ("Plate", 2));
@@ -650,13 +649,8 @@ var loadLedger = new OrderLedger();
 foreach (var part in ordersBack.Parts) loadLedger.Restore(part);
 Check(loadLedger.Active && loadLedger.Waiting["Plate"] == 40 && loadLedger.UnassignedItems().SequenceEqual(new[] { "Plate" }),
     "orders load: waiting parts go on, queued parts wait for their crafters to be found");
-loadLedger.Assign("Plate", new[] { 7, 8 });
-Check(loadLedger.QueuedOfCrafter(7) == 23 && loadLedger.QueuedOfCrafter(8) == 22 && loadLedger.UnassignedItems().Count == 0,
-    "orders load: queued parts split over the crafters that still have them (45 = 23 + 22)");
-var madeLedger = new OrderLedger();
-madeLedger.Restore(new SavedPart { Item = "Motor", Ordered = 10, Queued = 10 });
-madeLedger.Assign("Motor", Array.Empty<int>());
-Check(!madeLedger.Active && madeLedger.Done("Motor") == 10, "orders load: no crafter has them any more = they were made");
+Check(loadLedger.Requeue("Plate") == 45 && loadLedger.Waiting["Plate"] == 85 && loadLedger.UnassignedItems().Count == 0,
+    "orders load: queued parts that no crafter has any more wait for a crafter again (40 + 45)");
 
 Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
 return fails == 0 ? 0 : 1;

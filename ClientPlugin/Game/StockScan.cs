@@ -5,6 +5,7 @@ using Keen.Game2.Simulation.GameSystems.Ownership;
 using Keen.Game2.Simulation.Utils;
 using Keen.Game2.Simulation.WorldObjects.CubeBlocks;
 using Keen.Game2.Simulation.WorldObjects.CubeGrids;
+using Keen.Game2.Simulation.WorldObjects.CubeBlocks.Production.ItemConverters;
 using Keen.Game2.Simulation.WorldObjects.Items;
 using Keen.VRage.Core.Game.Systems;
 using Keen.VRage.DCS.Components;
@@ -34,7 +35,7 @@ internal sealed class Maker
     public string Name;
     /// <summary>Smelter, Refinery, Assembler, Fabricator or Gearforge, the same names the recipes use.</summary>
     public string Machine;
-    public object Converter;
+    public ItemConverterComponent Converter;
     public InventoryComponent Input;
     public InventoryComponent Output;
     /// <summary>Set by the conveyor check; true until proven otherwise.</summary>
@@ -123,9 +124,9 @@ internal static class StockScan
 
             if (machine != null && OrderPlan.MayUse(name) && inventories.Count > 0)
             {
-                object converter = null;
+                ItemConverterComponent converter = null;
                 foreach (var component in entity.Components)
-                    if (component.GetType().Name == "ItemConverterComponent") { converter = component; break; }
+                    if (component.GetType() == typeof(ItemConverterComponent)) { converter = (ItemConverterComponent)(object)component; break; }
                 if (converter != null)
                     info.Makers.Add(new Maker
                     {

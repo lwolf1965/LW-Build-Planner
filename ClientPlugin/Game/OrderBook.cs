@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using ClientPlugin.Policy;
 using Keen.Game2.Simulation.WorldObjects.CubeGrids;
+using Keen.Game2.Simulation.WorldObjects.CubeBlocks.Production.ItemConverters;
 using Keen.Game2.Simulation.WorldObjects.Items;
 
 namespace ClientPlugin.Game;
@@ -98,6 +99,16 @@ internal static class OrderBook
     private static double lastTick;
     private static bool wasActive;
     private const string NoProgressNote = "no progress (ore or sub-parts missing?)";
+    /// <summary>K2: the ore shortage is looked up at most this often while parts stall (it reads the recipes of the crafters).</summary>
+    private const double OreShortEverySeconds = 10;
+    private static volatile string oreShortText = "";
+    private static string oreShortHud = "";
+    private static double oreShortAt = -100;
+    /// <summary>
+    /// K2: the ore the stalled parts still lack, as the window words it ("Iron 12,000, Nickel 300 (+2)"), or "" when
+    /// nothing is short (or no part stalls). The window shows it as a red line under the progress bar.
+    /// </summary>
+    public static string OreShortText => oreShortText;
     /// <summary>Crafters (ids) that were crafting at the last tick.</summary>
     private static HashSet<int> crafting = new();
     /// <summary>Crafters (ids) that hold a counted batch but do not craft: since when (seconds). Used to get a crafter back after a lost batch.</summary>
@@ -249,12 +260,13 @@ internal static class OrderBook
     public static void Reset()
     {
         if (Ledger.Active) PluginLog.Info("Orders cleared.");
-        // Blocks not done yet stay in the list (their parts were not all handed out); parts kept for blocks that
-        // already left stay kept.
+        // Blocks not done yet stay in the list (their parts were not all handed out); blocks that already left stay off it.
         Groups.Clear();
         HandedOut.Clear();
         Ledger.Clear();
         Notes.Clear();
+        oreShortHud = "";
+        oreShortText = "";
         LastStock.Clear();
         LastProgress.Clear();
         ProgressLogged.Clear();
@@ -362,7 +374,6 @@ internal static class OrderBook
         CrafterNames.Clear();
         grid = null;
         unlinked = new HashSet<object>();
-        Ledger.ClearReserved();
     }
 
     private static int IdOf(Maker maker)
@@ -457,6 +468,7 @@ internal static class OrderBook
 
         // 2. No arrivals for a minute and none of the item's crafters working: tell the player, keep the line.
         Notes.Clear();
+        var newlyStuck = new List<string>();
         foreach (var itemId in Ledger.QueuedLines.Select(q => q.Item).Distinct().ToList())
         {
             var working = Ledger.QueuedLines.Where(q => q.Item == itemId).Any(q => q.Crafter == OrderLedger.Unassigned
@@ -465,15 +477,22 @@ internal static class OrderBook
             if (working) LastProgress[itemId] = now;
             if (now - (LastProgress.TryGetValue(itemId, out var last) ? last : now) < StuckSeconds) continue;
             Notes[itemId] = NoProgressNote;
-            if (Told.Add("stuck:" + itemId))
-                PlanStore.Say(Tr.T("hud.noProgress", NameOf(itemId)));
+            if (Told.Add("stuck:" + itemId)) newlyStuck.Add(itemId);
+        }
+
+        // K2: when ore is what stalled them, the HUD says which ore and how much (once per shortage), else the old text.
+        UpdateOreShort(scan, allGrids, now, newlyStuck.Count > 0);
+        foreach (var itemId in newlyStuck)
+        {
+            if (oreShortHud.Length == 0) PlanStore.Say(Tr.T("hud.noProgress", NameOf(itemId)));
+            else if (Told.Add("ore:" + oreShortHud)) PlanStore.Say(Tr.T("hud.oreShort", oreShortHud));
         }
 
         // 3. Waiting parts go to the free crafters in batches, oldest order first (see Policy/Dispatch.cs).
         var free = byId.Keys.Where(id => Dispatch.IsFree(crafting.Contains(id), Ledger.QueuedOfCrafter(id),
             IdleSince.TryGetValue(id, out var since) ? now - since : 0, IdleReclaimSeconds)).ToList();
         var wants = new List<DispatchWant>();
-        var recipes = new Dictionary<(int Crafter, string Item), object>();
+        var recipes = new Dictionary<(int Crafter, string Item), ItemRecipeDefinition>();
         var ableOf = new Dictionary<string, (int Count, string Machine)>();
         // M3: in the order the blocks need them (the first block's parts first, smallest block first); parts of no
         // block group (none today) after them, oldest order first.
@@ -490,7 +509,7 @@ internal static class OrderBook
                 LastProgress[itemId] = now;
                 continue;
             }
-            var able = new List<(int Id, Maker Maker, object Recipe)>();
+            var able = new List<(int Id, Maker Maker, ItemRecipeDefinition Recipe)>();
             foreach (var pair in byId)
             {
                 var recipe = CrafterApi.CanProduce(pair.Value.Converter, item);
@@ -604,6 +623,7 @@ internal static class OrderBook
     /// Why each crafter that holds a planner line is not crafting it (Lone 2026-11-20: a Smelter "waiting for
     /// sub-parts" read wrong; Smelters and Refineries wait for ore, only Assemblers and Fabricators for parts): its
     /// recipe's inputs that storage lacks, ore named as ore; nothing lacking: earlier jobs in its queue come first.
+    /// Its output full (cargo full, K4) comes before both: nothing else matters until there is room.
     /// </summary>
     private static void ExplainWaits(Dictionary<int, Maker> byId, IEnumerable<GridStock> allGrids)
     {
@@ -627,6 +647,11 @@ internal static class OrderBook
                 WaitReasons[(crafterId, itemId)] = Tr.T("detail.crafting");
                 continue;
             }
+            if (crafterId != OrderLedger.Unassigned && CrafterApi.OutputFull(maker))
+            {
+                WaitReasons[(crafterId, itemId)] = Tr.T("detail.outputFull");
+                continue;
+            }
             var recipe = CrafterApi.CanProduce(maker.Converter, item);
             if (recipe == null) continue;
             var lacking = CrafterApi.Inputs(recipe).Where(i => stock.GetValueOrDefault(i.Item) < i.Amount).Select(i => i.Item).ToList();
@@ -634,6 +659,58 @@ internal static class OrderBook
             WaitReasons[(crafterId, itemId)] = ore.Count > 0 ? Tr.T("detail.waitOre", string.Join(", ", ore.Select(OrderJob.NameOf)))
                 : lacking.Count > 0 ? Tr.T("detail.waitPart", string.Join(", ", lacking.Select(OrderJob.NameOf)))
                 : Tr.T("detail.earlierJobs");
+        }
+    }
+
+    /// <summary>Storage the crafters reach, by item id (linked storage on the crafters' grid and on the other grids).</summary>
+    private static Dictionary<string, long> StockById(IEnumerable<GridStock> allGrids)
+    {
+        var stock = new Dictionary<string, long>();
+        foreach (var store in allGrids.SelectMany(g => g.Stores).Where(s => !unlinked.Contains(s.BlockEntity)))
+            foreach (var (item, amount) in store.Items)
+            {
+                var id = PlanReport.Id(item);
+                stock[id] = stock.GetValueOrDefault(id) + (long)Math.Floor(amount);
+            }
+        return stock;
+    }
+
+    /// <summary>
+    /// K2: while parts show "no progress", looks up the ore they still lack (their recipe trees down to ore, minus
+    /// what storage holds; Policy/OreShort) for the HUD and the window. Not every tick: it reads the crafters' recipes.
+    /// A failed lookup leaves the old text of "no progress" (never blocks anything).
+    /// </summary>
+    private static void UpdateOreShort(GridStock scan, IEnumerable<GridStock> allGrids, double now, bool force)
+    {
+        var stuck = Notes.Where(n => n.Value == NoProgressNote).Select(n => n.Key).Where(Items.ContainsKey).ToList();
+        if (stuck.Count == 0)
+        {
+            if (oreShortText.Length > 0) PluginLog.Info("Ore short for running orders: no longer.");
+            oreShortHud = "";
+            oreShortText = "";
+            Told.RemoveWhere(k => k.StartsWith("ore:"));
+            return;
+        }
+        if (!force && now - oreShortAt < OreShortEverySeconds) return;
+        oreShortAt = now;
+        try
+        {
+            var running = Ledger.IncomingAll().Where(i => stuck.Contains(i.Key)).ToDictionary(i => i.Key, i => i.Value);
+            var probe = new PlanReport();
+            var recipes = PlanReport.ReadRecipes(scan, stuck.Select(id => Items[id]), probe);
+            foreach (var pair in probe.Items) Items[pair.Key] = pair.Value; // names of the ore
+            var shortage = OreShort.Of(running, StockById(allGrids), recipes);
+            var hud = OreShort.Format(shortage, NameOf, (name, amount) => Tr.T("ore.more", amount.ToString("N0"), name));
+            var window = OreShort.Format(shortage, NameOf, (name, amount) => $"{name} {amount:N0}");
+            if (window != oreShortText && window.Length > 0) PluginLog.Info("Ore short for running orders: " + window);
+            oreShortHud = hud;
+            oreShortText = window;
+        }
+        catch (Exception e)
+        {
+            PluginLog.Warn("Ore shortage check failed, the plain no-progress text stays: " + e.Message);
+            oreShortHud = "";
+            oreShortText = "";
         }
     }
 

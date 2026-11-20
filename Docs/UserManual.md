@@ -76,7 +76,9 @@ What you carry is not counted. With nothing missing it says "Everything is in st
 | no progress | nothing for a minute and no crafter works on it |
 | stopped, rest not made | its crafter is gone, or no crafter could take it |
 
-Under a line, each crafter and why it waits: "crafting", "waits for ore: Iron" (Smelters, Refineries), "waits for Steel Plate" (Assemblers, Fabricators) or "earlier jobs first". **Stop orders** drops the parts not yet given to a crafter (crafters finish their queues); when all is done the button reads **Remove orders**.
+When a part shows "no progress" because ore ran out, the HUD says once "Build: running orders need 12,000 more Iron." and a red line under the progress bar says "Ore missing: Iron 12,000" while it lasts (the three largest shortages, "+N" for more). It counts what the stalled parts still need beyond the storage the crafters reach.
+
+Under a line, each crafter and why it waits: "crafting", "waits for ore: Iron" (Smelters, Refineries), "waits for Steel Plate" (Assemblers, Fabricators), "output full: free cargo" (its output inventory is full, the conveyors have nowhere to put the parts) or "earlier jobs first". **Stop orders** drops the parts not yet given to a crafter (crafters finish their queues); when all is done the button reads **Remove orders**.
 
 **Buttons**
 | Button | What it does |
@@ -117,7 +119,9 @@ You can add blocks and press **Order missing** while orders run: what is already
 | X: no conveyor link, not used / not counted | warning: a crafter or container is cut off | connect it, or ignore |
 | Not enough cargo space | the new parts weigh more than the free capacity of the reachable storage | add or empty containers, or order fewer blocks |
 | Cargo space gets tight | the new parts need more than 80 % of the free capacity (warning) | — |
+| A crafter says "output full: free cargo" | the storage it reaches is full, the crafter stopped | empty or add containers; it goes on by itself |
 | X is not progressing | nothing arrived for a minute, no crafter works on it | check ore and sub-parts; **Stop orders** if it stays |
+| Running orders need 12,000 more Iron / Ore missing: Iron 12,000 | the stalled parts need more ore than the storage holds | mine or buy it; the orders go on by themselves |
 | Not working, not used: Assembler 5 m (2), … | note: unfinished, damaged or unpowered crafters are left out (at most four names, "+N") | finish, repair or power them |
 
 The cargo check adds up the free capacity of the storage the crafters reach, minus parts already on order, and compares it with the mass of the new parts. When the game does not report a capacity or a mass, the planner gives no verdict and never blocks on a guess.

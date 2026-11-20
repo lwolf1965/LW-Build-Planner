@@ -258,7 +258,7 @@ internal sealed class PlanReport
     /// (CanProduceItem) and read the recipe's inputs and outputs. Items no crafter here can make have no recipe: they
     /// count as raw (ore) or as "crafter missing" in the alerts.
     /// </summary>
-    private static Dictionary<string, Recipe> ReadRecipes(GridStock grid, IEnumerable<ItemDefinition> wanted, PlanReport report)
+    internal static Dictionary<string, Recipe> ReadRecipes(GridStock grid, IEnumerable<ItemDefinition> wanted, PlanReport report)
     {
         var recipes = new Dictionary<string, Recipe>();
         var queue = new Queue<ItemDefinition>(wanted);

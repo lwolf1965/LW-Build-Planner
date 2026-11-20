@@ -137,7 +137,7 @@ public static class BlockSets
 
     /// <summary>
     /// Plans an order of these lines (blueprints not treated as a whole).
-    /// available: parts storage holds for the list (stock + on its way - kept for blocks handed out earlier).
+    /// available: parts storage holds for the list (stock + on its way, less what the ordered blocks still need).
     /// treeStock: stock the recipe tree may use for making parts (ingots, ore, sub-parts; the list's parts at 0).
     /// onlyMissing: "Order missing" (cover from storage, fit the ore); false: "Order all" (make every block new; the
     /// caller blocks it when the ore is short).
